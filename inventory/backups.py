@@ -68,12 +68,14 @@ def create_backup(directory,pg_bin=None):
 def verify_backup(directory):
     directory=Path(directory).expanduser().resolve()
     try:manifest=json.loads((directory/'manifest.json').read_text())
-    except (OSError,ValueError) as error:raise ValidationError('백업 manifest를 읽을 수 없습니다.') from error
-    if manifest.get('format_version')!=1 or manifest.get('vendor') not in ['sqlite','postgresql']:
+    except (OSError,ValueError,UnicodeError) as error:raise ValidationError('백업 manifest를 읽을 수 없습니다.') from error
+    if not isinstance(manifest,dict) or manifest.get('format_version')!=1 or manifest.get('vendor') not in ['sqlite','postgresql']:
         raise ValidationError('지원하지 않는 백업 형식입니다.')
     expected_name='database.sqlite3' if manifest['vendor']=='sqlite' else 'database.dump'
     if manifest.get('database_file')!=expected_name:raise ValidationError('백업 파일명이 유효하지 않습니다.')
     database=directory/expected_name
+    if (directory/'manifest.json').is_symlink() or database.is_symlink():
+        raise ValidationError('심볼릭 링크 백업 파일은 검증하지 않습니다.')
     if not database.is_file() or _sha256(database)!=manifest.get('sha256'):
         raise ValidationError('백업 체크섬이 일치하지 않습니다. 복원을 중단합니다.')
     return database,manifest

@@ -43,3 +43,12 @@
 - 새 DB로 복원해 재고/예약/최근 거래를 확인한다.
 - 운영 환경 파일을 새 DB로 전환하는 것은 담당자 승인과 점검 후 수행한다.
 - 서버가 달라지면 DB 이외에 환경 변수/도메인/인증서/회사 저장공간 연결도 다시 준비해야 한다.
+
+## 보관 백업의 정기 점검
+
+```bash
+# DB 접속 없이 완료 백업 전체의 체크섬과 최신성을 확인한다.
+.venv/bin/python manage.py check_backups /path/to/backup-storage --max-age-hours 26
+```
+
+Windows에서도 동일하게 `python.exe manage.py check_backups '\\NAS\share\sunil'`로 실행한다. JSON 결과와 성공 종료 코드 0을 함께 확인한다. 경로 접근 불가, 완료 백업 없음, 최신 정상 백업 26시간 초과, 손상/형식 오류, 복사 임시 폴더가 있으면 실패 종료한다. 저장소 최상위의 `sunil-*` 완료 폴더를 대상으로 모든 DB 파일을 읽으므로 백업 용량이 크면 시간이 걸린다. 백업 복사 실행 중에는 임시 폴더가 표시될 수 있어 완료 뒤 다시 확인한다. 파일을 수정하거나 삭제하지 않고, DB 복원/SQLite 내부 구조/PostgreSQL dump 내용까지 검증하지 않는다. 후임자가 수행할 실제 복원·전환 검증은 [인수 검증표](../docs/HANDOVER_CHECKLIST.md)를 따른다.

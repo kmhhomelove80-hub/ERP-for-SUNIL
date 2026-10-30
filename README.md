@@ -8,6 +8,7 @@
 - [배치별 진도](docs/PROGRESS.md)
 - [검증 결과와 남은 조건](docs/ACCEPTANCE.md)
 - [사용·인수인계 안내](docs/USER_GUIDE.md)
+- [현장 인수 검증표·남은 일정](docs/HANDOVER_CHECKLIST.md)
 - [운영·백업·복구](deploy/README.md)
 
 ## 로컬 개발 실행

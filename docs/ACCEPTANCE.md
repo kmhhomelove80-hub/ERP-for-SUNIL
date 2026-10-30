@@ -53,3 +53,8 @@
 - SQLite 85개 발견: 82개 통과 / PG 전용 3개 skip. PostgreSQL 85개 발견: 83개 통과 / SQLite 전용 2개 skip. PG NAS 모사 복사/새 DB 복원 대조도 통과.
 - 실제 Chromium/Waitress: 기존 업무 흐름 외에 선택 출고→완료 주문 재조회→관리자 품목 설명 수정→이전 피킹 상세 유지, 행별 이력, 실제 stock/ERP xlsx 다운로드까지 통과했다. 출고 3개 후 현재고 합계 17, 이전 ERP 비교 차이 2가 보존되는 것을 확인했다. 가상 데이터만 사용했다.
 - 결과는 validation/browser-history/에 보관했다. 실제 Windows/NAS 장비 검증은 여전히 미실행이며, 단계 수 기준 5/7(약 71%)은 유지한다.
+
+
+## 2026-10-31 보관 백업·인수 준비 추가 검증
+
+전체 90개: SQLite 87 통과/3 PG 전용 skip, PostgreSQL 88 통과/2 SQLite 전용 skip. 신규 5개는 무DB·무수정 보관 점검, 오래됨/누락/미래 시각, 손상·중단 복사, 비정상 manifest, 명령 JSON/실패 종료를 검증한다. 실제 PG 백업→모사 NAS→새 DB 복원/전체 테이블 대조도 통과했다. 실제 NAS SMB/Windows 예약 작업은 미실행이다. 현장 검수 결과는 HANDOVER_CHECKLIST.md에 별도로 기록한다. 백업 체크섬/최신성 점검은 실제 복원 검증을 대신하지 않는다.
