@@ -1,0 +1,14 @@
+[Unit]
+Description=SUNIL consistent database backup
+After=postgresql.service
+
+[Service]
+Type=oneshot
+User=sunil
+Group=sunil
+WorkingDirectory=/srv/sunil/app
+EnvironmentFile=/etc/sunil.env
+ExecStart=/srv/sunil/app/.venv/bin/python manage.py backup_database --directory /var/lib/sunil/backups
+UMask=0077
+PrivateTmp=true
+NoNewPrivileges=true

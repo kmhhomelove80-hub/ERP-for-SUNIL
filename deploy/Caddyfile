@@ -1,0 +1,13 @@
+# Set ERP_PUBLIC_HOST to the approved real hostname when configuring the server.
+{$ERP_PUBLIC_HOST} {
+	request_body {
+		max_size 12MB
+	}
+	handle_path /static/* {
+		root * /srv/sunil/app/staticfiles
+		file_server
+	}
+	handle {
+		reverse_proxy 127.0.0.1:8000
+	}
+}

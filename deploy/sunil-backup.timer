@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily SUNIL database backup
+
+[Timer]
+OnCalendar=*-*-* 02:00:00 Asia/Seoul
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target

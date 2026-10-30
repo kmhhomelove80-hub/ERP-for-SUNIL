@@ -1,0 +1,1 @@
+{% extends 'inventory/base.html' %}{% block content %}<div class="entry"><h1>{{ title }}</h1><p>{{ description }}</p><form method="post" class="card">{% csrf_token %}{{ form.as_p }}<button>확인 후 반영</button> <a href="{% url 'stock-list' %}">돌아가기</a></form></div>{% endblock %}

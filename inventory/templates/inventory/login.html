@@ -1,0 +1,1 @@
+{% extends 'inventory/base.html' %}{% block content %}<div class="entry"><h1>창고 관리 로그인</h1><form method="post" class="card">{% csrf_token %}{{ form.as_p }}<input type="hidden" name="next" value="{{ next }}"><button>로그인</button></form></div>{% endblock %}

@@ -1,0 +1,13 @@
+# Reference only. Create /etc/sunil.env securely on the actual server.
+# Generate a random ERP_SECRET_KEY; never commit its real value.
+ERP_DEBUG=0
+ERP_SECRET_KEY=REPLACE_WITH_RANDOM_SECRET
+ERP_ALLOWED_HOSTS=erp.company.example
+ERP_CSRF_TRUSTED_ORIGINS=https://erp.company.example
+ERP_TRUST_PROXY=1
+ERP_DB_NAME=sunil
+ERP_DB_USER=sunil
+ERP_DB_PASSWORD=REPLACE_WITH_DATABASE_PASSWORD
+ERP_DB_HOST=127.0.0.1
+ERP_DB_PORT=5432
+# Local PostgreSQL on the same host; use verified TLS for remote databases.

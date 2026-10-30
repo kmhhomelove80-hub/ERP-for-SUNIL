@@ -1,0 +1,24 @@
+[Unit]
+Description=SUNIL warehouse application
+After=network.target postgresql.service
+
+[Service]
+Type=simple
+User=sunil
+Group=sunil
+WorkingDirectory=/srv/sunil/app
+EnvironmentFile=/etc/sunil.env
+ExecStart=/srv/sunil/app/.venv/bin/gunicorn config.wsgi:application --bind 127.0.0.1:8000 --workers 1 --threads 2 --timeout 30 --access-logfile - --error-logfile -
+Restart=on-failure
+RestartSec=5
+PrivateTmp=true
+NoNewPrivileges=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/sunil /run/sunil
+RuntimeDirectory=sunil
+StateDirectory=sunil
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
