@@ -4,6 +4,7 @@
 
 현재 핵심 기능 구현/개발 검증을 완료했으며 운영 서버에는 배포하지 않았다. 회사 서버·호스트명·후임자·최종 자료를 확인한 뒤 전환한다.
 
+- [Windows 노트북 테스트 시작](docs/LAPTOP_TEST.md)
 - [개발계획](docs/DEVELOPMENT_PLAN.md)
 - [배치별 진도](docs/PROGRESS.md)
 - [검증 결과와 남은 조건](docs/ACCEPTANCE.md)
