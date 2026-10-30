@@ -15,6 +15,7 @@ urlpatterns = [
     path('movements/<uuid:pk>/',views.movement_detail,name='movement-detail'),
     path('stock/<int:pk>/move/',views.movement_create,name='movement-create'),
     path('archives/',views.archive_list,name='archive-list'),
+    path('operations/',views.operations_status,name='operations-status'),
     path('history/',views.history_list,name='history-list'),
     path('erp/',views.erp_list,name='erp-list'),
     path('erp/upload/',views.erp_upload,name='erp-upload'),

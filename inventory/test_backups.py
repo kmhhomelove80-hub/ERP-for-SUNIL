@@ -1,6 +1,7 @@
 from pathlib import Path
 import tempfile
 import sqlite3
+import os
 from unittest import skipUnless
 from django.core.exceptions import ValidationError
 from django.db import connection
@@ -21,7 +22,7 @@ class SQLiteBackupTests(TransactionTestCase):
                 self.assertEqual(restored.execute('select quantity from inventory_stock').fetchone()[0],7)
                 self.assertEqual(restored.execute('select code from inventory_item').fetchone()[0],'BACKUP-001')
             with self.assertRaises(ValidationError):restore_backup(backup,sqlite_target=target)
-            self.assertEqual(target.stat().st_mode&0o777,0o600)
+            if os.name != "nt":self.assertEqual(target.stat().st_mode&0o777,0o600)
     def test_corruption_stops_restore_before_target_creation(self):
         with tempfile.TemporaryDirectory() as directory:
             backup=create_backup(directory)

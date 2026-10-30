@@ -30,3 +30,16 @@
 ## 산출물 위치
 
 실데이터가 포함될 수 있는 결과는 Git checkout 밖 `/workspace/erp-analysis/validation`에 보관한다. full-migration-result.json은 집계와 일치 여부, browser/는 가상 데이터 화면/PDF/브라우저 결과다. 원본 Excel과 실제 업무 데이터/백업을 원격 저장소에 올리지 않는다.
+
+## Windows/NAS 준비 추가 검증 (배치 006)
+
+- 현재 후보는 상시 가동 Windows Server + Synology DS1621+(가용 약 10.5TB). NAS DSM/RAM/Container Manager와 Windows 버전/RAM은 아직 미확인이다.
+- SQLite: 73개 발견, 70개 통과 / PG 전용 3개 skip.
+- PostgreSQL: 73개 발견, 71개 통과 / SQLite 파일 복원 전용 2개 skip.
+- 새 검증: NAS 모사 경로로 검증 복사/재시도, 연결 없음/중단/손상 시 로컬 보존과 미완료 폴더 정리, 다른 백업 덮어쓰기 차단, Windows .exe 경로, 운영 점검의 예약 불일치 탐지/무수정/권한/예정일 경고.
+- 실제 PG dump → 로컬 폴더로 모사한 NAS 저장소 검증 복사 → 새 DB 복원 후 전체 테이블 건수와 재고/예약/감사 내용 일치.
+- Waitress 3.0.2의 기동 및 Chromium 전체 업무 흐름/운영 점검 화면 통과. **검증 OS는 Linux이며 실제 Windows 실행 검증은 아니다.** 결과는 validation/browser-waitress/에 가상 데이터만 보관했다.
+- Windows용 Caddy 구성의 validate 통과(검증 실행 파일/OS는 Linux). 실제 Windows 경로 접근이나 인증서 발급을 확인한 것은 아니다.
+- Windows PowerShell 스크립트는 UTF-8 BOM으로 준비했다. 현재 환경에는 PowerShell이 없어 실제 실행/문법 파서는 미실행이다. CI에 Windows 단위 테스트/PowerShell 문법 검사 작업을 추가했지만 원격 push/CI 실행은 하지 않았다.
+- DPAPI, ACL, 작업 스케줄러, 재부팅 자동 시작, 실제 SMB 공유/권한, 실제 NAS 복원은 회사 장비에서 검증해야 한다.
+- 회사 장비를 활용하면 서버 가격 조회/네트워크 초안 적용은 더 이상 이 경로의 필수 선행 조건이 아니다. 추가 환경 게시나 NAS 관리 화면 접속은 수행하지 않았다.

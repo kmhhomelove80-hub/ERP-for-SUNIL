@@ -293,3 +293,9 @@ def receipt_cancel(request,pk):
             messages.success(request,'입고 원거래를 취소했습니다. 원거래와 취소 이력은 보존됩니다.')
             return redirect('receipt-list')
     return render(request,'inventory/form.html',{'form':form,'title':'입고 원거래 취소','description':f'{receipt.stock.item.code} / {receipt.quantity}개 전량 취소. 현재 가용량 {receipt.stock.available}. 예약된 수량은 취소할 수 없으며, 예정→도착 전환 후에는 원거래 취소를 차단합니다.'})
+
+@user_passes_test(lambda user:user.is_active and user.is_staff)
+def operations_status(request):
+    from .readiness import readiness_report
+    from django.conf import settings
+    return render(request,'inventory/operations.html',{'report':readiness_report(deployment=not settings.DEBUG),'debug':settings.DEBUG})

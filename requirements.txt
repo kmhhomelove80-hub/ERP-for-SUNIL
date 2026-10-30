@@ -1,9 +1,11 @@
 asgiref==3.13.0
 Django==5.2.18
 et_xmlfile==2.0.0
-gunicorn==26.2.0
+gunicorn==26.2.0; sys_platform != "win32"
 openpyxl==3.1.5
 psycopg==3.3.6
 psycopg-binary==3.3.6
 sqlparse==0.6.0
 typing_extensions==4.16.0
+waitress==3.0.2
+tzdata>=2025.2; sys_platform == "win32"

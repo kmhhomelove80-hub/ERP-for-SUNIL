@@ -1,0 +1,12 @@
+{$ERP_PUBLIC_HOST} {
+	request_body {
+		max_size 12MB
+	}
+	handle_path /static/* {
+		root * C:/SUNIL/ERP/staticfiles
+		file_server
+	}
+	handle {
+		reverse_proxy 127.0.0.1:8000
+	}
+}

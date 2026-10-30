@@ -16,7 +16,7 @@ from django.contrib.auth import get_user_model
 from django.core.management import call_command
 from django.utils import timezone
 from inventory.models import Item,Stock,AuditEvent
-from inventory.backups import create_backup,restore_backup
+from inventory.backups import create_backup,restore_backup,copy_backup_to_storage
 from django.core.exceptions import ValidationError
 
 parser=argparse.ArgumentParser();parser.add_argument('--pg-bin',required=True);args=parser.parse_args()
@@ -33,7 +33,9 @@ with connection.cursor() as cursor:
     for table in tables:
         cursor.execute('SELECT count(*) FROM '+connection.ops.quote_name(table));counts[table]=cursor.fetchone()[0]
 with tempfile.TemporaryDirectory(prefix='sunil-backup-') as directory:
-    backup=create_backup(directory,args.pg_bin)
+    backup=create_backup(Path(directory)/'local',args.pg_bin)
+    storage=Path(directory)/'simulated-nas';storage.mkdir()
+    backup=copy_backup_to_storage(backup,storage)
     env=os.environ.copy();env.update(PGHOST=env['ERP_DB_HOST'],PGPORT=env['ERP_DB_PORT'],PGUSER=env['ERP_DB_USER'],PGPASSWORD='')
     subprocess.run([str(Path(args.pg_bin)/'createdb'),'sunil_restored'],env=env,check=True)
     restore_env=os.environ.copy();restore_env['ERP_DB_NAME']='sunil_restored'
@@ -48,4 +50,4 @@ with tempfile.TemporaryDirectory(prefix='sunil-backup-') as directory:
         assert restored.execute('SELECT detail FROM inventory_auditevent').fetchone()[0]['quantity']==7
     second=subprocess.run([sys.executable,str(root/'manage.py'),'restore_database',str(backup),'--apply','--pg-bin',args.pg_bin],cwd=root,env=restore_env,capture_output=True,text=True)
     assert second.returncode!=0 and '비어 있는 새 PostgreSQL DB' in second.stderr
-    print('PASS: PostgreSQL dump/restore, all table counts, stock/reservation/audit data, overwrite refusal')
+    print('PASS: PostgreSQL dump, verified simulated-NAS copy/restore, all table counts, stock/reservation/audit data, overwrite refusal')

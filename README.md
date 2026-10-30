@@ -82,3 +82,22 @@ PostgreSQL 스크립트는 임시 Unix 소켓 DB에서 테스트 후 새 DB 백�
 브라우저 검증은 가상 데이터/임시 계정/DB만 사용한다. 현재 환경에서는 기본 Python의 Playwright 1.62.0과 Chromium으로 실행했다. PNG/PDF/집계 결과만 남기고 서버와 DB를 제거한다. PDF는 브라우저 인쇄 저장이며 서버 자동 PDF 보관 기능은 아니다.
 
 GitHub Actions 설정은 SQLite/PostgreSQL 테스트용으로 작성했으며 아직 원격에서 실행하지 않았다. 실제 데이터·백업·암호·원본 Excel을 원격 저장소에 올리지 않는다.
+
+## 회사 Windows 서버 / Synology NAS 준비
+
+현재 운영 후보는 상시 가동 Windows Server와 Synology DS1621+다. Windows에서는 Waitress를 사용하며 Gunicorn 설치는 플랫폼 조건으로 제외한다. [Windows 실행·예약 백업 안내](deploy/windows/README.md)에 비밀값 없는 설정 예제, DPAPI 준비, 자동 시작/HTTPS/백업 작업 등록 절차를 정리했다. 실제 Windows 버전·메모리·NAS 공유 권한은 아직 확인 전이다.
+
+```bash
+# 현재 개발 환경에서 Waitress 앱 기동 검증
+.venv/bin/python scripts/smoke_http.py --waitress
+# 가상 데이터로 전체 브라우저 흐름과 운영 점검 화면 확인
+python scripts/smoke_browser.py --waitress --artifacts /tmp/sunil-waitress-artifacts
+# DB/마이그레이션/원장 예약 합계 읽기 전용 점검
+.venv/bin/python manage.py check_readiness
+# 운영 모드/DB/HTTPS 설정까지 점검
+.venv/bin/python manage.py check_readiness --deployment
+# 로컬 백업 후 별도 연결된 저장소로 검증 복사
+.venv/bin/python manage.py backup_to_storage --directory /path/to/local-backups --storage /path/to/connected-storage --pg-bin /path/to/postgresql/bin
+```
+
+운영 점검은 /operations/의 관리자 화면에서도 확인한다. 읽기 전용이며 실제 인증서·Windows 작업 실행·NAS 접근/복원을 대신하지 않는다. 위 별도 저장소 복사는 존재하는 경로만 사용하고, 임시 복사→체크섬→완료 폴더 전환을 거친다. NAS 실패 시 로컬 백업을 보존한다. Windows에서는 UNC 경로와 실행 계정의 SMB 권한이 필요하다.

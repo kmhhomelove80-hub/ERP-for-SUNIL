@@ -20,6 +20,7 @@ root=Path(__file__).resolve().parent.parent
 parser=argparse.ArgumentParser()
 parser.add_argument('--artifacts',default='/tmp/sunil-browser-artifacts')
 parser.add_argument('--chromium',default='/usr/bin/chromium')
+parser.add_argument('--waitress',action='store_true')
 args=parser.parse_args()
 artifacts=Path(args.artifacts).resolve();artifacts.mkdir(parents=True,exist_ok=True)
 python=root/'.venv/bin/python'
@@ -50,7 +51,8 @@ w=Workbook();s=w.active;s.title='ERP재고';s.append(['창고','ERP 코드','현
     with socket.socket() as sock:
         sock.bind(('127.0.0.1',0));port=sock.getsockname()[1]
     base=f'http://127.0.0.1:{port}'
-    process=subprocess.Popen([str(python),'manage.py','runserver',f'127.0.0.1:{port}','--noreload'],cwd=root,env=environment,stdout=log,stderr=log)
+    command=[str(python),'-m','waitress',f'--listen=127.0.0.1:{port}','--threads=4','config.wsgi:application'] if args.waitress else [str(python),'manage.py','runserver',f'127.0.0.1:{port}','--noreload']
+    process=subprocess.Popen(command,cwd=root,env=environment,stdout=log,stderr=log)
     try:
         for _ in range(50):
             if process.poll() is not None:
@@ -139,8 +141,11 @@ w=Workbook();s=w.active;s.title='ERP재고';s.append(['창고','ERP 코드','현
             pc.get_by_label('원거래와 전량 취소 수량을 확인했습니다.',exact=False).check()
             pc.get_by_role('button',name='확인 후 반영',exact=True).click()
             assert pc.get_by_text('취소됨',exact=False).is_visible()
+            pc.goto(base+'/operations/')
+            assert pc.get_by_text('원장 allocated와 활성 예약 합계 일치',exact=False).is_visible()
+            pc.screenshot(path=str(artifacts/'desktop-operations.png'),full_page=True)
             assert not errors,errors
-            report={'mobile_viewport':'390x844','desktop_viewport':'1440x1000','mobile_submit_admin_process_mobile_result':True,'no_mobile_detail_page_horizontal_overflow':True,'history_search':True,'picking_paste_confirm_and_pdf':True,'javascript_errors':errors,'synthetic_data_only':True,'erp_upload_compare_review':True,'y02_shortage_reference':True,'receipt_create_and_cancel':True}
+            report={'mobile_viewport':'390x844','desktop_viewport':'1440x1000','mobile_submit_admin_process_mobile_result':True,'no_mobile_detail_page_horizontal_overflow':True,'history_search':True,'picking_paste_confirm_and_pdf':True,'javascript_errors':errors,'synthetic_data_only':True,'erp_upload_compare_review':True,'y02_shortage_reference':True,'receipt_create_and_cancel':True,'operational_reservation_check':True,'server':'waitress' if args.waitress else 'runserver'}
             (artifacts/'result.json').write_text(json.dumps(report,ensure_ascii=False,indent=2))
             print(json.dumps(report,ensure_ascii=False,indent=2))
             browser.close()

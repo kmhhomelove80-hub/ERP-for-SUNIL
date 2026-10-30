@@ -11,13 +11,16 @@ from pathlib import Path
 
 root = Path(__file__).resolve().parent.parent
 parser = argparse.ArgumentParser()
-parser.add_argument('--gunicorn',action='store_true')
+group=parser.add_mutually_exclusive_group()
+group.add_argument('--gunicorn',action='store_true')
+group.add_argument('--waitress',action='store_true')
 args = parser.parse_args()
 with tempfile.TemporaryFile() as log:
     with socket.socket() as sock:
         sock.bind(('127.0.0.1',0))
         port = sock.getsockname()[1]
     command = [sys.executable,'-m','gunicorn','config.wsgi:application','--bind',f'127.0.0.1:{port}','--workers','1','--threads','2'] if args.gunicorn else [sys.executable,str(root/'manage.py'),'runserver',f'127.0.0.1:{port}','--noreload']
+    if args.waitress:command=[sys.executable,'-m','waitress',f'--listen=127.0.0.1:{port}','--threads=4','--max-request-body-size=12582912','config.wsgi:application']
     process = subprocess.Popen(command,cwd=root,stdout=log,stderr=log)
     try:
         for _ in range(50):

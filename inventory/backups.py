@@ -7,6 +7,7 @@ import secrets
 import shutil
 import sqlite3
 import subprocess
+import sys
 from datetime import datetime,timezone
 from django.conf import settings
 from django.core.exceptions import ValidationError
@@ -19,7 +20,8 @@ def _sha256(path):
     return digest.hexdigest()
 
 def _pg_program(name,pg_bin):
-    value=str(Path(pg_bin)/name) if pg_bin else shutil.which(name)
+    executable=name+'.exe' if sys.platform=='win32' else name
+    value=str(Path(pg_bin)/executable) if pg_bin else shutil.which(executable)
     if not value or not Path(value).is_file(): raise ValidationError(f'{name} 실행 파일이 필요합니다. --pg-bin 경로를 지정하세요.')
     return value
 
@@ -102,3 +104,38 @@ def restore_backup(directory,*,sqlite_target=None,pg_bin=None):
         if cursor.fetchone()[0]:raise ValidationError('비어 있는 새 PostgreSQL DB에만 복원할 수 있습니다.')
     _run_pg([_pg_program('pg_restore',pg_bin),'--exit-on-error','--single-transaction','--no-owner','--no-privileges','--dbname',str(settings.DATABASES['default']['NAME']),str(database)])
     return '새 PostgreSQL DB 복원 완료'
+
+def copy_backup_to_storage(backup_directory,storage_directory):
+    """Copy a finished backup, verify it, then expose the completed directory.
+
+    The storage must already exist (e.g. an authenticated NAS UNC share). A
+    failure leaves the verified local backup intact; no retention/deletion runs.
+    """
+    import tempfile
+    database,manifest=verify_backup(backup_directory)
+    source=Path(backup_directory).expanduser().resolve()
+    storage=Path(storage_directory).expanduser().resolve()
+    if not storage.is_dir():raise ValidationError('NAS/백업 저장 경로가 연결되어 있지 않습니다.')
+    if source==storage or storage in source.parents or source in storage.parents:
+        raise ValidationError('원본 백업과 별도의 저장 경로를 사용하세요.')
+    target=storage/source.name
+    if target.exists():
+        _,existing=verify_backup(target)
+        if existing!=manifest:raise ValidationError('같은 이름의 다른 백업이 있습니다. 덮어쓰지 않습니다.')
+        return target
+    staged=Path(tempfile.mkdtemp(prefix='.sunil-partial-',dir=storage))
+    try:
+        for name in [manifest['database_file'],'manifest.json']:
+            original=source/name
+            if original.is_symlink():raise ValidationError('심볼릭 링크 백업 파일은 복사하지 않습니다.')
+            shutil.copyfile(original,staged/name)
+            (staged/name).chmod(0o600)
+        verify_backup(staged)
+        try:staged.rename(target)
+        except OSError:
+            if not target.is_dir():raise
+            _,existing=verify_backup(target)
+            if existing!=manifest:raise ValidationError('다른 백업을 덮어쓰지 않습니다.')
+        return target
+    finally:
+        if staged.exists():shutil.rmtree(staged)

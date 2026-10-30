@@ -1,0 +1,23 @@
+{
+  "AppRoot": "C:\\SUNIL\\ERP",
+  "PythonExe": "C:\\SUNIL\\ERP\\.venv\\Scripts\\python.exe",
+  "DataRoot": "C:\\ProgramData\\SUNIL",
+  "SecretsPath": "C:\\ProgramData\\SUNIL\\secrets.clixml",
+  "BackupDirectory": "C:\\ProgramData\\SUNIL\\backups",
+  "NasDirectory": "\\\\NAS-HOST\\ERP-backups",
+  "PgBin": "C:\\Program Files\\PostgreSQL\\17\\bin",
+  "Listen": "127.0.0.1:8000",
+  "Environment": {
+    "ERP_DEBUG": "0",
+    "ERP_ALLOWED_HOSTS": "ERP-HOSTNAME",
+    "ERP_CSRF_TRUSTED_ORIGINS": "https://ERP-HOSTNAME",
+    "ERP_TRUST_PROXY": "1",
+    "ERP_DB_NAME": "sunil",
+    "ERP_DB_USER": "sunil",
+    "ERP_DB_HOST": "127.0.0.1",
+    "ERP_DB_PORT": "5432",
+    "ERP_PUBLIC_HOST": "ERP-HOSTNAME"
+  },
+  "CaddyExe": "C:\\SUNIL\\tools\\caddy.exe",
+  "CaddyConfig": "C:\\SUNIL\\ERP\\deploy\\windows\\Caddyfile"
+}

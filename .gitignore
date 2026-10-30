@@ -5,3 +5,10 @@ __pycache__/
 .env
 media/
 staticfiles/
+*.clixml
+runtime.json
+backups/
+*.dump
+*.log
+*.xlsm
+*.xlsx
