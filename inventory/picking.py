@@ -5,6 +5,7 @@ from django.db.models import F
 from .locking import warehouse_transaction
 from .models import Stock, Allocation, PickingOrder
 from .services import audit
+from .transaction_details import stock_details
 
 MAX_QUANTITY = 2147483647
 
@@ -74,7 +75,7 @@ def confirm_picking(*, request_id, project, rows, preview, allow_shortage, actor
         stock = Stock.objects.select_for_update().get(pk=row['stock_id'])
         stock.reserved += row['quantity']
         stock.save(update_fields=['reserved'])
-        allocation = Allocation.objects.create(stock=stock,order=order,project=project,quantity=row['quantity'])
+        allocation = Allocation.objects.create(stock=stock,order=order,project=project,quantity=row['quantity'],assigned_details=stock_details(stock))
         audit(actor,'reserve',allocation.pk,stock=stock.pk,quantity=row['quantity'],order=str(order.pk),code=row['code'],project=project)
     audit(actor,'picking_confirm',order.pk,shortages=current['shortages'],project=project)
     return order

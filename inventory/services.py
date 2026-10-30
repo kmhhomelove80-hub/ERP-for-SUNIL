@@ -2,6 +2,13 @@ from django.core.exceptions import ValidationError
 from .locking import warehouse_transaction
 from django.utils import timezone
 from .models import Stock, Allocation, MovementRequest, AuditEvent
+from .transaction_details import stock_details
+
+MAX_QUANTITY=2147483647
+
+def require_quantity(quantity):
+    if isinstance(quantity,bool) or not isinstance(quantity,int) or not 0<quantity<=MAX_QUANTITY:
+        raise ValidationError('수량은 허용 범위 내의 양의 정수여야 합니다.')
 
 def audit(actor, action, reference, **detail):
     AuditEvent.objects.create(actor=actor, action=action, reference=str(reference), detail=detail)
@@ -13,7 +20,7 @@ def reserve(*, stock_id, project, quantity, actor):
         raise ValidationError('프로젝트와 가용량 이내의 양수 수량이 필요합니다.')
     stock.reserved += quantity
     stock.save(update_fields=['reserved'])
-    allocation = Allocation.objects.create(stock=stock, project=project.strip(), quantity=quantity)
+    allocation = Allocation.objects.create(stock=stock, project=project.strip(), quantity=quantity,assigned_details=stock_details(stock))
     audit(actor, 'reserve', allocation.pk, quantity=quantity, stock=stock.pk, code=stock.item.code, project=project.strip())
     return allocation
 
@@ -25,7 +32,10 @@ def cancel_allocation(*, allocation_id, actor):
     stock.reserved -= a.quantity
     stock.save(update_fields=['reserved'])
     a.state = 'cancelled'
-    a.save(update_fields=['state'])
+    a.cancelled_at=timezone.now()
+    a.completed_by=actor
+    a.completed_details=stock_details(stock)
+    a.save(update_fields=['state','cancelled_at','completed_by','completed_details'])
     audit(actor, 'cancel', a.pk, quantity=a.quantity,code=stock.item.code,project=a.project)
 
 @warehouse_transaction
@@ -45,7 +55,9 @@ def release_selected(*, allocation_ids, shipped_at, actor):
         stock.reserved -= a.quantity
         stock.save(update_fields=['quantity', 'reserved'])
         a.state, a.shipped_at, a.released_at = 'released', shipped_at, timezone.now()
-        a.save(update_fields=['state','shipped_at','released_at'])
+        a.completed_by=actor
+        a.completed_details=stock_details(stock)
+        a.save(update_fields=['state','shipped_at','released_at','completed_by','completed_details'])
         audit(actor, 'release', a.pk, quantity=a.quantity, shipped_at=shipped_at.isoformat(),code=stock.item.code,project=a.project)
 
 @warehouse_transaction
@@ -80,14 +92,17 @@ def process_movement(*, request_id, actor, rejection_reason=''):
     elif snapshot_changed or source.status != Stock.Status.RECEIVED or not destination or destination.casefold() == source.location.casefold() or request.quantity <= 0 or request.quantity > source.available:
         request.state, request.reason = 'rejected', '입고 상태·위치 또는 가용 잔량을 확인하세요.'
     else:
-        target, _ = Stock.objects.get_or_create(item=source.item, warehouse=source.warehouse, location=destination, status=Stock.Status.RECEIVED)
+        target, _ = Stock.objects.get_or_create(item=source.item, warehouse=source.warehouse, location=destination, status=Stock.Status.RECEIVED,defaults={'legacy_name':source.legacy_name,'legacy_specification':source.legacy_specification})
         target = Stock.objects.select_for_update().get(pk=target.pk)
         before['target_quantity'] = target.quantity
-        source.quantity -= request.quantity
-        target.quantity += request.quantity
-        source.save(update_fields=['quantity'])
-        target.save(update_fields=['quantity'])
-        request.state = 'completed'
+        if target.quantity+request.quantity>MAX_QUANTITY:
+            request.state,request.reason='rejected','도착 위치의 합산 재고가 허용 범위를 초과합니다.'
+        else:
+            source.quantity -= request.quantity
+            target.quantity += request.quantity
+            source.save(update_fields=['quantity'])
+            target.save(update_fields=['quantity'])
+            request.state = 'completed'
     request.processed_at = timezone.now()
     request.processed_by = actor
     request.save(update_fields=['state','reason','processed_at','processed_by'])
@@ -97,6 +112,7 @@ def process_movement(*, request_id, actor, rejection_reason=''):
 @warehouse_transaction
 def receive_stock(*, item_id, location, quantity, status, expected_date, sender, request_id, actor):
     from .models import Receipt
+    require_quantity(quantity)
     location, sender = location.strip(), sender.strip()
     payload = dict(item_id=item_id, location=location, quantity=quantity, status=status, expected_date=expected_date.isoformat() if expected_date else None, sender=sender)
     previous = Receipt.objects.select_related('stock').filter(request_id=request_id).first()
@@ -104,7 +120,7 @@ def receive_stock(*, item_id, location, quantity, status, expected_date, sender,
         if previous.actor_id != actor.pk or previous.payload != payload:
             raise ValidationError('이미 사용한 요청번호입니다.')
         return previous
-    if not location or quantity <= 0 or status not in Stock.Status.values:
+    if not location or len(location)>150 or len(sender)>100 or status not in Stock.Status.values:
         raise ValidationError('위치·상태·양수 수량을 확인하세요.')
     if status == Stock.Status.EXPECTED and (not expected_date or not sender):
         raise ValidationError('예정 재고에는 예정일과 담당자가 필요합니다.')
@@ -112,6 +128,7 @@ def receive_stock(*, item_id, location, quantity, status, expected_date, sender,
     stock = Stock.objects.select_for_update().get(pk=stock.pk)
     if status == Stock.Status.EXPECTED and stock.quantity and (stock.expected_date != expected_date or stock.sender != sender):
         raise ValidationError('다른 예정일/담당자의 재고입니다. 별도 임시 식별자를 사용하세요.')
+    if stock.quantity+quantity>MAX_QUANTITY:raise ValidationError('합산 재고가 허용 범위를 초과합니다.')
     receipt = Receipt.objects.create(request_id=request_id,stock=stock,quantity=quantity,actor=actor,payload=payload)
     stock.quantity += quantity
     stock.expected_date = expected_date if status == Stock.Status.EXPECTED else None
@@ -127,9 +144,10 @@ def confirm_arrival(*, stock_id, location, actor):
     location = location.strip()
     if source.status != Stock.Status.EXPECTED or source.quantity <= 0 or not location:
         raise ValidationError('입고 예정 재고와 실제 보관 위치를 확인하세요.')
-    target, _ = Stock.objects.get_or_create(item=source.item, warehouse=source.warehouse, location=location, status=Stock.Status.RECEIVED)
+    target, _ = Stock.objects.get_or_create(item=source.item, warehouse=source.warehouse, location=location, status=Stock.Status.RECEIVED,defaults={'legacy_name':source.legacy_name,'legacy_specification':source.legacy_specification})
     target = Stock.objects.select_for_update().get(pk=target.pk)
     qty, reserved = source.quantity, source.reserved
+    if target.quantity+qty>MAX_QUANTITY:raise ValidationError('합산 재고가 허용 범위를 초과합니다.')
     source.quantity, source.reserved = 0, 0
     source.save(update_fields=['quantity','reserved'])
     target.quantity += qty

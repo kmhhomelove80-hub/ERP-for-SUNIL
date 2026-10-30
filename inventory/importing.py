@@ -7,6 +7,7 @@ from .locking import warehouse_transaction
 from openpyxl import load_workbook
 from .models import Item, Stock, Allocation, ImportBatch
 from .services import audit
+from .transaction_details import stock_details
 
 MAX_ROWS = 50000
 
@@ -94,7 +95,8 @@ def apply_import(plan, actor):
             imported_items[row['code']] = item
         index[row['code'], row['location']] = Stock.objects.create(item=item, warehouse='Y09', location=row['location'], status=row['status'], quantity=row['quantity'], reserved=row['reserved'],legacy_name=row['name'],legacy_specification=row['specification'])
     for row in plan['allocations']:
-        Allocation.objects.create(stock=index[row['code'],row['location']], project=row['project'], quantity=row['quantity'], legacy_seq=row['legacy_seq'])
+        stock=index[row['code'],row['location']]
+        Allocation.objects.create(stock=stock, project=row['project'], quantity=row['quantity'], legacy_seq=row['legacy_seq'],assigned_details=stock_details(stock))
     batch = ImportBatch.objects.create(digest=plan['digest'],source_name=plan['source_name'],actor=actor,summary=plan['summary'])
     audit(actor,'initial_import',batch.pk,**plan['summary'])
     return batch

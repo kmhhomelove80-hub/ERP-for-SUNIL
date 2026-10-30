@@ -48,7 +48,7 @@ Set-Location C:\SUNIL\ERP
 | SUNIL-HTTPS | 시스템 시작, 네트워크 준비 후 | powershell.exe -NoProfile -NonInteractive -File "C:\SUNIL\ERP\deploy\windows\Run-Caddy.ps1" -ConfigPath "C:\ProgramData\SUNIL\runtime.json" |
 | SUNIL-Backup | 매일 02:00(Windows 시간대 한국 확인), 놓친 작업 실행 | powershell.exe -NoProfile -NonInteractive -File "C:\SUNIL\ERP\deploy\windows\Run-Backup.ps1" -ConfigPath "C:\ProgramData\SUNIL\runtime.json" |
 
-운영 계정은 DPAPI 비밀 파일을 만든 계정과 같아야 한다. 로그온 여부와 관계없이 실행, 실패 시 재시작, 동일 작업 중복 실행 금지를 설정한다. **SMB NAS 접근에는 네트워크 자격 증명이 필요하므로 ‘암호를 저장하지 않음(로컬 리소스만)’ 방식은 사용하지 않는다.** 매핑 드라이브 문자 대신 UNC 경로를 사용한다. NAS 권한/자격 증명은 해당 계정으로 작업 실행 시 확인한다.
+운영 계정은 DPAPI 비밀 파일을 만든 계정과 같아야 한다. 로그온 여부와 관계없이 실행, 실패 시 재시작, 동일 작업 중복 실행 금지를 설정한다. 상시 실행되는 SUNIL-ERP/SUNIL-HTTPS는 작업 실행 시간 제한(기본 3일 등)을 해제해 임의 종료되지 않도록 한다. 백업 작업에는 회사 기준의 유한 시간 제한을 두고, 시간 초과/중단 후 로컬 백업 및 NAS 임시 폴더를 점검한다. **SMB NAS 접근에는 네트워크 자격 증명이 필요하므로 ‘암호를 저장하지 않음(로컬 리소스만)’ 방식은 사용하지 않는다.** 매핑 드라이브 문자 대신 UNC 경로를 사용한다. NAS 권한/자격 증명은 해당 계정으로 작업 실행 시 확인한다.
 
 백업은 먼저 로컬에 완료하고 NAS 임시 폴더로 복사한 다음 체크섬이 맞을 때 완료 폴더로 전환한다. NAS 연결 실패 시 로컬 백업은 남고 작업은 실패 상태가 된다. 실패 로그와 다음 성공을 확인한다. 실행 중 DB 파일이나 DPAPI 비밀 파일을 일반 동기화 폴더에 넣지 않는다.
 
@@ -62,3 +62,11 @@ Set-Location C:\SUNIL\ERP
 - Windows DPAPI 파일은 다른 계정/컴퓨터에서 그대로 복호화되지 않는다. 복구 시 회사 보관 DB 암호와 새 앱 키로 비밀 파일을 다시 준비한다. DB 백업 자체도 별도 접근 제어가 필요하다.
 
 Windows의 chmod는 POSIX 600/700과 같은 ACL 보장을 제공하지 않는다. NAS 공유 폴더/로컬 DataRoot 권한을 관리자가 실제로 확인해야 한다.
+
+## 서버 정보의 읽기 전용 확인
+
+`Inspect-Server.ps1`은 Windows 버전/빌드, 실제 RAM, 고정 디스크 용량, PowerShell 버전과 도구 존재 여부만 출력한다. 관리자 계정명·IP·암호·환경 변수 전체·장비 일련번호를 출력하지 않으며 설치/설정 변경/NAS 접속을 수행하지 않는다. 회사 스크립트 실행 정책에 따라 검토 후 실행하고 결과를 인수 담당자와 확인한다. 현재 Linux 환경에서는 실제 실행하지 않았다.
+
+```powershell
+powershell.exe -NoProfile -File C:\SUNIL\ERP\deploy\windows\Inspect-Server.ps1
+```

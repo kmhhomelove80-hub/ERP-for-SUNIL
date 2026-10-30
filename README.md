@@ -101,3 +101,10 @@ python scripts/smoke_browser.py --waitress --artifacts /tmp/sunil-waitress-artif
 ```
 
 운영 점검은 /operations/의 관리자 화면에서도 확인한다. 읽기 전용이며 실제 인증서·Windows 작업 실행·NAS 접근/복원을 대신하지 않는다. 위 별도 저장소 복사는 존재하는 경로만 사용하고, 임시 복사→체크섬→완료 폴더 전환을 거친다. NAS 실패 시 로컬 백업을 보존한다. Windows에서는 UNC 경로와 실행 계정의 SMB 권한이 필요하다.
+
+## 거래 기록 보존·엑셀 출력
+
+- /picking/은 완료된 주문까지 다시 찾아 인쇄할 수 있는 목록이다. /allocation-history/는 기존 SEQ를 포함한 예약/출고/취소 행 이력이다.
+- 신규 거래는 배정 당시 상세와 출고·취소 당시 상세/처리자를 보존한다. 완료 기록은 나중에 바뀐 품목 설명을 따라 바뀌지 않는다. 예전 미저장 상세를 추정해 채우지 않는다.
+- 재고/ERP 대조 화면에서 검색 조건 전체를 조회용 xlsx로 내보낸다. 최대 50,000행, 텍스트의 수식 변환 방지, 음수/누락 보존을 검증했다.
+- deploy/windows/Inspect-Server.ps1은 실제 Windows 사양을 설치/변경 없이 확인하기 위한 준비 스크립트다. 실행 정책은 회사 기준을 따르며 현재 Linux에서 Windows 실행 검증을 주장하지 않는다.

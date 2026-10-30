@@ -52,6 +52,16 @@ class Allocation(models.Model):
     state = models.CharField(max_length=12, choices=[('reserved','예약'),('released','출고 확정'),('cancelled','취소')], default='reserved')
     shipped_at = models.DateTimeField(null=True, blank=True)
     released_at = models.DateTimeField(null=True, blank=True)
+    cancelled_at = models.DateTimeField(null=True,blank=True)
+    completed_by = models.ForeignKey(settings.AUTH_USER_MODEL,on_delete=models.PROTECT,null=True,blank=True,related_name='completed_allocations')
+    assigned_details = models.JSONField(default=dict)
+    completed_details = models.JSONField(default=dict)
+    @property
+    def display_details(self):
+        from .transaction_details import stock_details
+        if self.state!='reserved' and self.completed_details:
+            return dict(self.completed_details,recorded=True)
+        return dict(stock_details(self.stock),recorded=self.state=='reserved')
     class Meta:
         constraints = [models.CheckConstraint(condition=Q(quantity__gt=0), name='allocation_positive')]
 

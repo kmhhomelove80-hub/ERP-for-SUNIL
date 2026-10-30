@@ -78,7 +78,7 @@ def picking_create(request):
                 return redirect('picking-detail',pk=order.pk)
     return render(request,'inventory/picking_create.html',{'input_form':input_form,'preview':preview,'confirm_form':confirm_form})
 
-@login_required
+@user_passes_test(lambda user:user.is_active and user.is_staff)
 def picking_detail(request, pk):
     from .models import PickingOrder
     order = get_object_or_404(PickingOrder,pk=pk)
@@ -299,3 +299,71 @@ def operations_status(request):
     from .readiness import readiness_report
     from django.conf import settings
     return render(request,'inventory/operations.html',{'report':readiness_report(deployment=not settings.DEBUG),'debug':settings.DEBUG})
+
+@user_passes_test(lambda user:user.is_active and user.is_staff)
+def picking_list(request):
+    from .models import PickingOrder
+    from django.db.models import Count
+    rows=PickingOrder.objects.select_related('actor').annotate(total_rows=Count('allocations',distinct=True),active_rows=Count('allocations',filter=Q(allocations__state='reserved'),distinct=True),released_rows=Count('allocations',filter=Q(allocations__state='released'),distinct=True),cancelled_rows=Count('allocations',filter=Q(allocations__state='cancelled'),distinct=True)).order_by('-created_at','pk')
+    query=request.GET.get('q','').strip()
+    status=request.GET.get('status','')
+    if query:
+        rows=rows.filter(Q(project__icontains=query)|Q(allocations__stock__item__code__icontains=query)|Q(allocations__assigned_details__code__icontains=query)|Q(allocations__completed_details__code__icontains=query)).distinct()
+    if status=='active':rows=rows.filter(active_rows__gt=0)
+    elif status=='released':rows=rows.filter(active_rows=0,released_rows__gt=0)
+    elif status=='cancelled':rows=rows.filter(active_rows=0,released_rows=0,cancelled_rows__gt=0)
+    else:status=''
+    return render(request,'inventory/picking_list.html',{'page_obj':Paginator(rows,30).get_page(request.GET.get('page')),'query':query,'status':status})
+
+@user_passes_test(lambda user:user.is_active and user.is_staff)
+def allocation_history(request):
+    from .models import Allocation
+    query=request.GET.get('q','').strip()
+    status=request.GET.get('status','')
+    from django.db.models import F
+    from django.db.models.functions import Coalesce
+    rows=Allocation.objects.select_related('stock__item','order','completed_by').annotate(completed_time=Coalesce('released_at','cancelled_at')).order_by(F('completed_time').desc(nulls_last=True),'pk')
+    if query:rows=rows.filter(Q(project__icontains=query)|Q(legacy_seq__icontains=query)|Q(stock__item__code__icontains=query)|Q(completed_details__code__icontains=query)|Q(assigned_details__code__icontains=query))
+    if status in ['reserved','released','cancelled']:rows=rows.filter(state=status)
+    else:status=''
+    return render(request,'inventory/allocation_history.html',{'page_obj':Paginator(rows,50).get_page(request.GET.get('page')),'query':query,'status':status})
+
+@user_passes_test(lambda user:user.is_active and user.is_staff)
+def stock_export(request):
+    from django.http import HttpResponse
+    from django.utils import timezone
+    from .exports import workbook_bytes,MAX_EXPORT_ROWS
+    from .reconciliation import latest_reference
+    from .locking import warehouse_lock
+    query=request.GET.get('q','').strip();status=request.GET.get('status','')
+    rows=Stock.objects.select_related('item').filter(quantity__gt=0).order_by('item__code','location','pk')
+    if query:rows=rows.filter(Q(item__code__icontains=query)|Q(item__name__icontains=query)|Q(item__specification__icontains=query)|Q(location__icontains=query)|Q(legacy_name__icontains=query)|Q(legacy_specification__icontains=query))
+    if status in Stock.Status.values:rows=rows.filter(status=status)
+    with warehouse_lock():
+        if rows.count()>MAX_EXPORT_ROWS:return HttpResponse('검색 범위를 좁혀주세요. 내보내기 행 수 제한을 초과했습니다.',status=400)
+        reference,snapshot=latest_reference('Y09',list(rows.values_list('item__code',flat=True)))
+        data=workbook_bytes('재고조회',['ERP 코드','모델명','사양','창고','위치','입고 상태','현재고','allocated','가용량','품목 전체 출하대기','예정일','담당자'],([s.item.code,s.legacy_name or s.item.name,s.legacy_specification or s.item.specification,s.warehouse,s.location,s.get_status_display(),s.quantity,s.reserved,s.available,reference.get(s.item.code,{}).get('shipping_pending'),s.expected_date,s.sender] for s in rows.iterator(chunk_size=1000)))
+    response=HttpResponse(data,content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+    response['Content-Disposition']=f'attachment; filename="stock_{timezone.localtime():%Y%m%d_%H%M}.xlsx"'
+    return response
+
+@user_passes_test(lambda user:user.is_active and user.is_staff)
+def erp_export(request,pk):
+    from django.http import HttpResponse
+    from django.db.models import F
+    from django.utils import timezone
+    from .models import ErpSnapshot
+    from .exports import workbook_bytes,MAX_EXPORT_ROWS
+    from .locking import warehouse_lock
+    snapshot=get_object_or_404(ErpSnapshot,pk=pk)
+    query=request.GET.get('q','').strip();warehouse=request.GET.get('warehouse','Y09');issues=request.GET.get('issues','1')=='1'
+    if warehouse not in ['Y09','Y02']:warehouse='Y09'
+    rows=snapshot.rows.filter(warehouse=warehouse).order_by('code')
+    if query:rows=rows.filter(Q(code__icontains=query)|Q(name__icontains=query))
+    if warehouse=='Y09' and issues:rows=rows.filter(Q(erp_quantity__isnull=True)|~Q(erp_quantity=F('received')+F('expected')))
+    with warehouse_lock():
+        if rows.count()>MAX_EXPORT_ROWS:return HttpResponse('검색 범위를 좁혀주세요. 내보내기 행 수 제한을 초과했습니다.',status=400)
+        data=workbook_bytes('ERP대조',['창고','ERP 코드','모델명','ERP 현재고','도착분','예정분','관리 합계','차이(관리-ERP)','allocated','출하대기','확인 상태','원인','조치','ERP 기준시각(한국)','비교시각(한국)'],([r.warehouse,r.code,r.name,r.erp_quantity,r.received if warehouse=='Y09' else None,r.expected if warehouse=='Y09' else None,r.managed if warehouse=='Y09' else None,r.difference,r.reserved if warehouse=='Y09' else None,r.shipping_pending,r.get_review_state_display() if r.needs_review else '',r.reason,r.action_note,timezone.localtime(snapshot.erp_as_of).strftime('%Y-%m-%d %H:%M'),timezone.localtime(snapshot.created_at).strftime('%Y-%m-%d %H:%M')] for r in rows.iterator(chunk_size=1000)))
+    response=HttpResponse(data,content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+    response['Content-Disposition']=f'attachment; filename="erp_comparison_{warehouse}.xlsx"'
+    return response
