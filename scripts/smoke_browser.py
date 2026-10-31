@@ -31,6 +31,8 @@ with tempfile.TemporaryDirectory(prefix='sunil-browser-') as directory, tempfile
     environment=os.environ.copy()
     # Explicitly select disposable SQLite even if a production PG profile exists.
     environment.pop('ERP_DB_NAME',None)
+    environment['DJANGO_SETTINGS_MODULE']='config.settings'
+    environment['ERP_DEBUG']='1'
     environment['ERP_SQLITE_PATH']=str(Path(directory)/'db.sqlite3')
     password=secrets.token_urlsafe(24)
     environment['ERP_SMOKE_PASSWORD']=password
@@ -54,7 +56,10 @@ w=Workbook();s=w.active;s.title='ERP재고';s.append(['창고','ERP 코드','현
     with socket.socket() as sock:
         sock.bind(('127.0.0.1',0));port=sock.getsockname()[1]
     base=f'http://127.0.0.1:{port}'
-    command=[str(python),'-m','waitress',f'--listen=127.0.0.1:{port}','--threads=4','config.wsgi:application'] if args.waitress else [str(python),'manage.py','runserver',f'127.0.0.1:{port}','--noreload']
+    # Serve static assets inside the disposable Waitress fixture. Real
+    # deployment serves /static through Caddy, not this test-only wrapper.
+    waitress_code=f"from config.wsgi import application; from django.contrib.staticfiles.handlers import StaticFilesHandler; from waitress import serve; serve(StaticFilesHandler(application),host='127.0.0.1',port={port},threads=4)"
+    command=[str(python),'-c',waitress_code] if args.waitress else [str(python),'manage.py','runserver',f'127.0.0.1:{port}','--noreload']
     process=subprocess.Popen(command,cwd=root,env=environment,stdout=log,stderr=log)
     try:
         for _ in range(50):
@@ -80,6 +85,18 @@ w=Workbook();s=w.active;s.title='ERP재고';s.append(['창고','ERP 코드','현
                 page.wait_for_url(base+'/')
             login(phone,'browser-mobile')
             assert phone.locator('.mobile-stock-cards').get_by_text('DEMO-LAMP-001',exact=False).count()==1
+            for width,height in [(320,640),(360,780),(390,844),(430,932),(844,390)]:
+                phone.set_viewport_size({'width':width,'height':height})
+                assert phone.evaluate('document.documentElement.scrollWidth <= innerWidth'),(width,height)
+                tabs=phone.locator('.mobile-bottom-nav a')
+                assert tabs.count()==2
+                for tab in tabs.all():
+                    box=tab.bounding_box();assert box['height']>=44 and box['width']>=44
+                assert phone.locator('.mobile-stock-cards').is_visible()
+                assert not phone.locator('.desktop-stock-table').is_visible()
+            phone.set_viewport_size({'width':390,'height':844})
+            phone.get_by_role('textbox',name='재고 검색',exact=True).fill('DEMO-LAMP-001')
+            phone.wait_for_function("document.querySelector('#stock-search-status').textContent==='조회 완료'")
             phone.screenshot(path=str(artifacts/'mobile-stock.png'),full_page=True)
             phone.get_by_role('link',name='4개 할당 내역',exact=True).click()
             assert phone.get_by_role('heading',name='할당 프로젝트 확인',exact=True).is_visible()
@@ -90,6 +107,8 @@ w=Workbook();s=w.active;s.title='ERP재고';s.append(['창고','ERP 코드','현
             phone.get_by_role('link',name='재고 조회로',exact=True).click()
             phone.get_by_role('link',name='이동 요청',exact=True).click()
             phone.get_by_label('이동할 위치',exact=False).fill('B0202')
+            assert phone.get_by_label('요청 수량',exact=False).get_attribute('inputmode')=='numeric'
+            assert phone.get_by_role('button',name='이동 요청 등록',exact=True).bounding_box()['height']>=44
             phone.get_by_label('요청 수량',exact=False).fill('5')
             phone.get_by_label('품목·출발 위치·도착 위치·수량을 확인했습니다.',exact=False).check()
             phone.get_by_role('button',name='이동 요청 등록',exact=True).click()
@@ -204,7 +223,7 @@ w=Workbook();s=w.active;s.title='ERP재고';s.append(['창고','ERP 코드','현
             assert book.active['H2'].value==2
             book.close()
             assert not errors,errors
-            report={'mobile_allocation_project_details':True,'mobile_manager_menus_and_processing_hidden':True,'portrait_and_landscape_mobile_layout':True,'mobile_viewport':'390x844','desktop_viewport':'1440x1000','mobile_submit_admin_process_mobile_result':True,'no_mobile_detail_page_horizontal_overflow':True,'history_search':True,'picking_paste_confirm_and_pdf':True,'javascript_errors':errors,'synthetic_data_only':True,'erp_upload_compare_review':True,'y02_shortage_reference':True,'receipt_create_and_cancel':True,'operational_reservation_check':True,'completed_order_survives_master_edit':True,'stock_and_erp_excel_downloads':True,'server':'waitress' if args.waitress else 'runserver'}
+            report={'mobile_sizes_320_360_390_430_844':True,'mobile_touch_targets_44px':True,'mobile_numeric_quantity_input':True,'mobile_bottom_navigation':True,'mobile_allocation_project_details':True,'mobile_manager_menus_and_processing_hidden':True,'portrait_and_landscape_mobile_layout':True,'mobile_viewport':'390x844','desktop_viewport':'1440x1000','mobile_submit_admin_process_mobile_result':True,'no_mobile_detail_page_horizontal_overflow':True,'history_search':True,'picking_paste_confirm_and_pdf':True,'javascript_errors':errors,'synthetic_data_only':True,'erp_upload_compare_review':True,'y02_shortage_reference':True,'receipt_create_and_cancel':True,'operational_reservation_check':True,'completed_order_survives_master_edit':True,'stock_and_erp_excel_downloads':True,'server':'waitress' if args.waitress else 'runserver'}
             (artifacts/'result.json').write_text(json.dumps(report,ensure_ascii=False,indent=2))
             print(json.dumps(report,ensure_ascii=False,indent=2))
             browser.close()

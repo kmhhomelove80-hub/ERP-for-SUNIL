@@ -65,8 +65,8 @@ class AllocationActionForm(forms.Form):
 
 class MovementRequestForm(forms.Form):
     request_id = forms.UUIDField(widget=forms.HiddenInput,initial=uuid.uuid4)
-    destination = forms.CharField(label='이동할 위치',max_length=150)
-    quantity = forms.IntegerField(label='요청 수량',min_value=1,max_value=2147483647)
+    destination = forms.CharField(label='이동할 위치',max_length=150,widget=forms.TextInput(attrs={'autocomplete':'off','autocapitalize':'characters'}))
+    quantity = forms.IntegerField(label='요청 수량',min_value=1,max_value=2147483647,widget=forms.NumberInput(attrs={'inputmode':'numeric','pattern':'[0-9]*'}))
     confirmed = forms.BooleanField(label='품목·출발 위치·도착 위치·수량을 확인했습니다.')
 
 class MovementProcessForm(forms.Form):
