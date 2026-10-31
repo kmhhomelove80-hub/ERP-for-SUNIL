@@ -1,0 +1,18 @@
+{% load static %}
+<style>
+:root{--picking-font-size:8pt;--picking-line-height:1.15;--picking-pad-y:2px}
+.picking-print-table{font-size:var(--picking-font-size);line-height:var(--picking-line-height)}
+.picking-print-table th,.picking-print-table td{padding:var(--picking-pad-y) 4px}
+.picking-print-table small{font-size:.9em}
+.print-settings{display:flex;gap:14px;align-items:end;flex-wrap:wrap;padding:12px}
+.print-settings label{display:flex;flex-direction:column;gap:6px;margin:0}
+.print-settings p{flex-basis:100%;margin:0}
+@media print{.picking-print-table{font-size:var(--picking-font-size);line-height:var(--picking-line-height)}}
+</style>
+<section class="no-print card print-settings" aria-label="인쇄 설정">
+<label for="print-font-size">표 글자 크기<select id="print-font-size"><option value="7">7pt</option><option value="8" selected>8pt</option><option value="9">9pt</option><option value="10">10pt</option><option value="11">11pt</option><option value="12">12pt</option></select></label>
+<label for="print-density">행 간격<select id="print-density"><option value="compact" selected>좁게</option><option value="normal">보통</option></select></label>
+<button type="button" id="reset-print-settings">기본값으로</button>
+<p><small>선택한 크기와 간격을 화면 표와 인쇄에 함께 적용합니다. 이 브라우저에서 다음에도 유지됩니다. ERP CODE는 한 줄에 들어가도록 필요 시 더 작아집니다. 인쇄 결과는 미리보기에서 확인하세요.</small></p>
+</section>
+<script src="{% static 'inventory/print_settings.js' %}" defer></script>

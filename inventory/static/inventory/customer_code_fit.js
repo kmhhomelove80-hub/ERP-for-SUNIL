@@ -24,7 +24,8 @@
       // 18% ERP-code column. Reserve its padding/border as well. Calculate
       // independently of the preview viewport, which may still be screen-sized
       // when Chromium dispatches beforeprint.
-      const printSize = 10 * 96 / 72;
+      const selected = parseFloat(getComputedStyle(table).getPropertyValue('--picking-font-size')) || 8;
+      const printSize = selected * 96 / 72;
       const printAvailable = (210 - 2 * 6.35) * 96 / 25.4 * 0.18 - 10;
       context.font = font(style, printSize);
       code.style.setProperty('--code-print-size', fitted(printSize, printAvailable, context.measureText(code.textContent).width));
@@ -33,6 +34,7 @@
   fit();
   if (document.fonts) document.fonts.ready.then(fit);
   window.addEventListener('beforeprint', fit);
+  window.addEventListener('picking-print-settings-change', fit);
   window.addEventListener('afterprint', fit);
   if (window.ResizeObserver) new ResizeObserver(fit).observe(table);
   else window.addEventListener('resize', fit);
