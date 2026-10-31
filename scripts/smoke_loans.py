@@ -139,7 +139,11 @@ Stock.objects.create(item=b,location='OLD-B',quantity=5)
             pc.get_by_role('link',name='고객 양식 인쇄',exact=True).click()
             expect(pc.locator('table.customer')).to_contain_text('대체 ACTUAL-B')
             expect(pc.locator('table.customer')).to_contain_text('OLD-B [ 5ea ]')
+            expect(pc.locator('.picking-quantity-summary')).to_contain_text('요청 총수량 10개')
+            expect(pc.locator('.picking-quantity-summary')).to_contain_text('피킹 배정 총수량 10개')
             pc.pdf(path=str(artifacts/'customer-borrow-print.pdf'),prefer_css_page_size=True,print_background=True)
+            printed=subprocess.check_output(['pdftotext',str(artifacts/'customer-borrow-print.pdf'),'-'],text=True).replace(' ','').replace('\n','')
+            assert '요청총수량10개' in printed and '피킹배정총수량10개' in printed
             pc.goto(base+'/?q=ACTUAL-B')
             expect(pc.locator('.desktop-stock-table')).to_contain_text('NEW-RECEIPT')
             expect(pc.locator('#stock-results > .card')).to_contain_text('현재고 합계 5')
@@ -156,7 +160,7 @@ assert s.allocation.released_at is None
 assert SubstitutionSettlement.objects.count()==2
 '''
             subprocess.run([str(python),'manage.py','shell','-c',verify],cwd=root,env=environment,check=True,stdout=subprocess.DEVNULL)
-            report=dict(request_10_normal_5_borrow_5=True,ordinary_release_excludes_substitution=True,temporary_physical_outbound=True,partial_3_then_2_repayment=True,repay_conserves_quantity_and_new_location=True,erp_confirmation_no_inventory_mutation=True,old_snapshot_stays_outstanding_5=True,customer_print_tracks_requested_actual_codes=True,javascript_errors=errors,synthetic_data_only=True)
+            report=dict(picking_totals_in_screen_and_pdf=True,request_10_normal_5_borrow_5=True,ordinary_release_excludes_substitution=True,temporary_physical_outbound=True,partial_3_then_2_repayment=True,repay_conserves_quantity_and_new_location=True,erp_confirmation_no_inventory_mutation=True,old_snapshot_stays_outstanding_5=True,customer_print_tracks_requested_actual_codes=True,javascript_errors=errors,synthetic_data_only=True)
             (artifacts/'result.json').write_text(json.dumps(report,ensure_ascii=False,indent=2));print(json.dumps(report,ensure_ascii=False,indent=2));browser.close()
     finally:
         process.terminate()

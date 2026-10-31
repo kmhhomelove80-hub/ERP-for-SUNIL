@@ -1,0 +1,7 @@
+{% if totals %}<section class="picking-quantity-summary" aria-label="피킹 수량 확인">
+<strong>요청 총수량 {{ totals.requested|default_if_none:'미기록' }}{% if totals.requested != None %}개{% endif %}</strong>
+ · <strong>피킹 배정 총수량 {{ totals.allocated }}개</strong>
+ · 미배정 {{ totals.shortage|default_if_none:'확인 불가' }}{% if totals.shortage != None %}개{% endif %}
+{% if totals.matches %} · <strong>요청 수량과 일치</strong>{% elif totals.requested != None %} · <strong>요청 수량 확인 필요</strong>{% endif %}{% if totals.excess %} · 코드별 초과 배정 {{ totals.excess }}개{% endif %}
+{% if totals.substitute %}<br><small>정상 {{ totals.normal }}개 + 대체 {{ totals.substitute }}개 · 대체품은 요청 코드에 연결해 한 번만 합산합니다.</small>{% endif %}
+</section><style>.picking-quantity-summary{margin:12px 0;padding:10px;border:1px solid #bbc8d7;border-radius:6px;background:white}@media print{.picking-quantity-summary{font-size:var(--picking-font-size,8pt);line-height:1.2;margin:4px 0;padding:3px;border-radius:0;break-inside:avoid}.picking-quantity-summary small{font-size:.9em}}</style>{% endif %}

@@ -55,9 +55,12 @@ def picking_create(request):
     from .picking import plan_picking, confirm_picking
     input_form = PickingInputForm(request.POST if request.method == 'POST' and request.POST.get('action') == 'preview' else None, request.FILES or None)
     preview, confirm_form = None, None
+    totals = None
     if request.method == 'POST' and request.POST.get('action') == 'preview' and input_form.is_valid():
         d = input_form.cleaned_data
         preview = plan_picking(d['pasted_rows'])
+        from .picking_totals import picking_totals
+        totals = picking_totals(d['pasted_rows'], preview['allocations'])
         payload = dict(actor=request.user.pk,request_id=str(d['request_id']),project=d['project'],rows=d['pasted_rows'],preview=preview,customer_rows=d.get('customer_details',[]))
         token = signing.dumps(payload,salt='picking-preview',compress=True)
         confirm_form = PickingConfirmForm(initial={'preview_token':token})
@@ -81,15 +84,20 @@ def picking_create(request):
             else:
                 messages.success(request,'피킹 예약을 등록했습니다. 재고 차감은 실제 출고 후 Release에서 수행하세요.')
                 return redirect('picking-detail',pk=order.pk)
-    return render(request,'inventory/picking_create.html',{'input_form':input_form,'preview':preview,'confirm_form':confirm_form})
+    return render(request,'inventory/picking_create.html',{'input_form':input_form,'preview':preview,'confirm_form':confirm_form,'totals':totals})
 
 @user_passes_test(lambda user:user.is_active and user.is_staff)
 def picking_detail(request, pk):
     from .models import PickingOrder
     order = get_object_or_404(PickingOrder,pk=pk)
-    rows = order.allocations.select_related('stock__item','substitution').order_by('stock__item__code','stock__pk')
     from .substitutions import demand_balance
-    return render(request,'inventory/picking_detail.html',{'order':order,'allocations':rows,'balance':demand_balance(order)})
+    from .picking_totals import order_totals
+    from .locking import warehouse_lock
+    with warehouse_lock():
+        rows = list(order.allocations.select_related('stock__item','substitution').order_by('stock__item__code','stock__pk'))
+        balance = demand_balance(order)
+        totals = order_totals(order, rows)
+    return render(request,'inventory/picking_detail.html',{'order':order,'allocations':rows,'balance':balance,'totals':totals})
 
 @user_passes_test(lambda user: user.is_active and user.is_staff)
 def allocation_list(request):
@@ -407,7 +415,12 @@ def customer_picking_print(request, pk):
     from .models import PickingOrder
     from .customer_picking import customer_print_groups
     order=get_object_or_404(PickingOrder,pk=pk)
-    return render(request,'inventory/customer_picking_print.html',{'order':order,'groups':customer_print_groups(order)})
+    from .picking_totals import order_totals
+    from .locking import warehouse_lock
+    with warehouse_lock():
+        groups = customer_print_groups(order)
+        totals = order_totals(order)
+    return render(request,'inventory/customer_picking_print.html',{'order':order,'groups':groups,'totals':totals})
 
 
 @user_passes_test(lambda user:user.is_active and user.is_staff)
