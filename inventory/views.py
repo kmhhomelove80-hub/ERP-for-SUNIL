@@ -74,7 +74,7 @@ def picking_create(request):
                     initial['pasted_rows']='\n'.join(f"{r['quantity']}\t{r['code']}" for r in payload['rows'])
                 input_form = PickingInputForm(initial=initial)
                 from uuid import UUID
-                order = confirm_picking(request_id=UUID(payload['request_id']),project=payload['project'],rows=payload['rows'],preview=payload['preview'],allow_shortage=confirm_form.cleaned_data['allow_shortage'],actor=request.user,customer_rows=payload.get('customer_rows',[]))
+                order = confirm_picking(request_id=UUID(payload['request_id']),project=payload['project'],rows=payload['rows'],preview=payload['preview'],allow_shortage=confirm_form.cleaned_data['allow_shortage'],actor=request.user,customer_rows=payload.get('customer_rows',[]),substitution_draft=request.POST.get('substitution_draft')=='1')
             except (signing.BadSignature,ValidationError) as error:
                 messages.error(request,' / '.join(error.messages) if isinstance(error,ValidationError) else '미리보기가 만료되었거나 유효하지 않습니다. 다시 계산하세요.')
                 confirm_form = None
@@ -87,8 +87,9 @@ def picking_create(request):
 def picking_detail(request, pk):
     from .models import PickingOrder
     order = get_object_or_404(PickingOrder,pk=pk)
-    rows = order.allocations.select_related('stock__item').order_by('stock__item__code','stock__pk')
-    return render(request,'inventory/picking_detail.html',{'order':order,'allocations':rows})
+    rows = order.allocations.select_related('stock__item','substitution').order_by('stock__item__code','stock__pk')
+    from .substitutions import demand_balance
+    return render(request,'inventory/picking_detail.html',{'order':order,'allocations':rows,'balance':demand_balance(order)})
 
 @user_passes_test(lambda user: user.is_active and user.is_staff)
 def allocation_list(request):
@@ -98,7 +99,7 @@ def allocation_list(request):
     from .services import release_selected, cancel_selected
     query=request.GET.get('q','').strip()
     seq=request.GET.get('seq','').strip()
-    rows=Allocation.objects.filter(state='reserved').select_related('stock__item','order').order_by('project','legacy_seq','stock__item__code','pk')
+    rows=Allocation.objects.filter(state='reserved',substitution__isnull=True).select_related('stock__item','order').order_by('project','legacy_seq','stock__item__code','pk')
     if query: rows=rows.filter(project__icontains=query)
     if seq: rows=rows.filter(Q(legacy_seq__icontains=seq)|Q(order__id__icontains=seq))
     form=AllocationActionForm(request.POST or None)
@@ -189,7 +190,7 @@ def history_list(request):
         if d['start']: rows = rows.filter(created_at__date__gte=d['start'])
         if d['end']: rows = rows.filter(created_at__date__lte=d['end'])
         if d['q']:
-            rows = rows.filter(Q(reference__icontains=d['q'])|Q(actor__username__icontains=d['q'])|Q(detail__code__icontains=d['q'])|Q(detail__project__icontains=d['q'])|Q(detail__source_location__icontains=d['q'])|Q(detail__location__icontains=d['q'])|Q(detail__destination__icontains=d['q'])|Q(detail__reason__icontains=d['q']))
+            rows = rows.filter(Q(reference__icontains=d['q'])|Q(actor__username__icontains=d['q'])|Q(detail__code__icontains=d['q'])|Q(detail__requested_code__icontains=d['q'])|Q(detail__actual_code__icontains=d['q'])|Q(detail__project__icontains=d['q'])|Q(detail__source_location__icontains=d['q'])|Q(detail__location__icontains=d['q'])|Q(detail__destination__icontains=d['q'])|Q(detail__reason__icontains=d['q']))
     else: rows = rows.none()
     action_labels = dict(form.fields['action'].choices)
     page = Paginator(rows,50).get_page(request.GET.get('page'))
@@ -265,7 +266,12 @@ def erp_detail(request,pk):
     if warehouse=='Y09' and issues:
         rows=rows.filter(Q(erp_quantity__isnull=True)|~Q(erp_quantity=F('received')+F('expected')))
     totals=snapshot.rows.filter(warehouse=warehouse).aggregate(erp=Sum('erp_quantity'),received=Sum('received'),expected=Sum('expected'),reserved=Sum('reserved'))
-    return render(request,'inventory/erp_detail.html',{'snapshot':snapshot,'page_obj':Paginator(rows,50).get_page(request.GET.get('page')),'warehouse':warehouse,'issues':issues,'query':query,'totals':totals})
+    page=Paginator(rows,50).get_page(request.GET.get('page'))
+    if warehouse=='Y09':
+        from .substitutions import snapshot_summaries
+        summaries=snapshot_summaries(snapshot,[r.code for r in page.object_list])
+        for row in page.object_list:row.loan_summary=summaries.get(row.code)
+    return render(request,'inventory/erp_detail.html',{'snapshot':snapshot,'page_obj':page,'warehouse':warehouse,'issues':issues,'query':query,'totals':totals})
 
 @user_passes_test(lambda user: user.is_active and user.is_staff)
 def erp_review(request,pk):
@@ -329,12 +335,12 @@ def operations_status(request):
 def picking_list(request):
     from .models import PickingOrder
     from django.db.models import Count
-    rows=PickingOrder.objects.select_related('actor').annotate(total_rows=Count('allocations',distinct=True),active_rows=Count('allocations',filter=Q(allocations__state='reserved'),distinct=True),released_rows=Count('allocations',filter=Q(allocations__state='released'),distinct=True),cancelled_rows=Count('allocations',filter=Q(allocations__state='cancelled'),distinct=True)).order_by('-created_at','pk')
+    rows=PickingOrder.objects.select_related('actor').annotate(total_rows=Count('allocations',distinct=True),active_rows=Count('allocations',filter=Q(allocations__state__in=['reserved','substituted']),distinct=True),released_rows=Count('allocations',filter=Q(allocations__state__in=['released','settled']),distinct=True),cancelled_rows=Count('allocations',filter=Q(allocations__state='cancelled'),distinct=True)).order_by('-created_at','pk')
     query=request.GET.get('q','').strip()
     status=request.GET.get('status','')
     if query:
-        rows=rows.filter(Q(project__icontains=query)|Q(allocations__stock__item__code__icontains=query)|Q(allocations__assigned_details__code__icontains=query)|Q(allocations__completed_details__code__icontains=query)).distinct()
-    if status=='active':rows=rows.filter(active_rows__gt=0)
+        rows=rows.filter(Q(project__icontains=query)|Q(allocations__substitution__requested_code__icontains=query)|Q(allocations__stock__item__code__icontains=query)|Q(allocations__assigned_details__code__icontains=query)|Q(allocations__completed_details__code__icontains=query)).distinct()
+    if status=='active':rows=rows.filter(Q(active_rows__gt=0)|Q(total_rows=0))
     elif status=='released':rows=rows.filter(active_rows=0,released_rows__gt=0)
     elif status=='cancelled':rows=rows.filter(active_rows=0,released_rows=0,cancelled_rows__gt=0)
     else:status=''
@@ -347,9 +353,9 @@ def allocation_history(request):
     status=request.GET.get('status','')
     from django.db.models import F
     from django.db.models.functions import Coalesce
-    rows=Allocation.objects.select_related('stock__item','order','completed_by').annotate(completed_time=Coalesce('released_at','cancelled_at')).order_by(F('completed_time').desc(nulls_last=True),'pk')
-    if query:rows=rows.filter(Q(project__icontains=query)|Q(legacy_seq__icontains=query)|Q(stock__item__code__icontains=query)|Q(completed_details__code__icontains=query)|Q(assigned_details__code__icontains=query))
-    if status in ['reserved','released','cancelled']:rows=rows.filter(state=status)
+    rows=Allocation.objects.select_related('stock__item','order','completed_by','substitution').annotate(completed_time=Coalesce('released_at','cancelled_at')).order_by(F('completed_time').desc(nulls_last=True),'pk')
+    if query:rows=rows.filter(Q(project__icontains=query)|Q(legacy_seq__icontains=query)|Q(substitution__requested_code__icontains=query)|Q(stock__item__code__icontains=query)|Q(completed_details__code__icontains=query)|Q(assigned_details__code__icontains=query))
+    if status in ['reserved','released','cancelled','substituted','settled']:rows=rows.filter(state=status)
     else:status=''
     return render(request,'inventory/allocation_history.html',{'page_obj':Paginator(rows,50).get_page(request.GET.get('page')),'query':query,'status':status})
 
@@ -388,7 +394,9 @@ def erp_export(request,pk):
     if warehouse=='Y09' and issues:rows=rows.filter(Q(erp_quantity__isnull=True)|~Q(erp_quantity=F('received')+F('expected')))
     with warehouse_lock():
         if rows.count()>MAX_EXPORT_ROWS:return HttpResponse('검색 범위를 좁혀주세요. 내보내기 행 수 제한을 초과했습니다.',status=400)
-        data=workbook_bytes('ERP대조',['창고','ERP 코드','모델명','ERP 현재고','도착분','예정분','관리 합계','차이(관리-ERP)','allocated','출하대기','확인 상태','원인','조치','ERP 기준시각(한국)','비교시각(한국)'],([r.warehouse,r.code,r.name,r.erp_quantity,r.received if warehouse=='Y09' else None,r.expected if warehouse=='Y09' else None,r.managed if warehouse=='Y09' else None,r.difference,r.reserved if warehouse=='Y09' else None,r.shipping_pending,r.get_review_state_display() if r.needs_review else '',r.reason,r.action_note,timezone.localtime(snapshot.erp_as_of).strftime('%Y-%m-%d %H:%M'),timezone.localtime(snapshot.created_at).strftime('%Y-%m-%d %H:%M')] for r in rows.iterator(chunk_size=1000)))
+        from .substitutions import snapshot_summaries
+        loan_summary=snapshot_summaries(snapshot,list(rows.values_list('code',flat=True))) if warehouse=='Y09' else {}
+        data=workbook_bytes('ERP대조',['창고','ERP 코드','모델명','ERP 현재고','도착분','예정분','관리 합계','차이(관리-ERP)','allocated','출하대기','확인 상태','원인','조치','ERP 기준시각(한국)','비교시각(한국)','관련 대체 출고 건수','기준시각 미상환 수량'],([r.warehouse,r.code,r.name,r.erp_quantity,r.received if warehouse=='Y09' else None,r.expected if warehouse=='Y09' else None,r.managed if warehouse=='Y09' else None,r.difference,r.reserved if warehouse=='Y09' else None,r.shipping_pending,r.get_review_state_display() if r.needs_review else '',r.reason,r.action_note,timezone.localtime(snapshot.erp_as_of).strftime('%Y-%m-%d %H:%M'),timezone.localtime(snapshot.created_at).strftime('%Y-%m-%d %H:%M'),loan_summary.get(r.code,{}).get('count',0),loan_summary.get(r.code,{}).get('outstanding',0)] for r in rows.iterator(chunk_size=1000)))
     response=HttpResponse(data,content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
     response['Content-Disposition']=f'attachment; filename="erp_comparison_{warehouse}.xlsx"'
     return response
@@ -436,3 +444,71 @@ def receipt_bulk(request):
                 messages.success(request,f"{len(payload['rows'])}개 행을 일괄 입고했습니다.")
                 return redirect('receipt-list')
     return render(request,'inventory/receipt_bulk.html',{'form':form,'preview':preview,'confirm_form':confirm_form,'warnings':locals().get('warnings',[])})
+
+
+@user_passes_test(lambda user:user.is_active and user.is_staff)
+def substitution_create(request, pk):
+    from .models import PickingOrder
+    from .forms import SubstitutionForm
+    from .substitutions import reserve_substitution
+    order=get_object_or_404(PickingOrder,pk=pk)
+    form=SubstitutionForm(request.POST or None,order=order)
+    if request.method=='POST' and form.is_valid():
+        d=form.cleaned_data
+        try:record=reserve_substitution(request_id=d['request_id'],order_id=order.pk,requested=d['requested'],stock_id=d['stock'].pk,quantity=d['quantity'],reason=d['reason'],actor=request.user)
+        except ValidationError as error:form.add_error(None,error)
+        else:
+            messages.success(request,'대체품을 예약했습니다. 실제 출고 시 대체 출고(빌림)를 처리하세요.')
+            return redirect('substitution-detail',pk=record.pk)
+    return render(request,'inventory/form.html',{'form':form,'title':f'{order.project} 대체품 배정','description':'현재 미배정 수량을 다른 코드로 1:1 배정합니다. 이 단계는 예약이며 실물 차감은 대체 출고(빌림) 때 수행합니다.'})
+
+
+@user_passes_test(lambda user:user.is_active and user.is_staff)
+def substitution_detail(request, pk):
+    from .models import Substitution
+    from .forms import SubstitutionDispatchForm,SubstitutionSettlementForm,SubstitutionErpForm,SubstitutionCancelForm
+    from .substitutions import dispatch_substitution,settle_substitution,confirm_company_erp,repaid_quantity,cancel_substitution
+    record=get_object_or_404(Substitution.objects.select_related('allocation__stock__item','allocation__order','created_by','erp_confirmed_by'),pk=pk)
+    action=request.POST.get('action','')
+    dispatch_form=SubstitutionDispatchForm(request.POST if action=='dispatch' else None)
+    settlement_form=SubstitutionSettlementForm(request.POST if action=='settle' else None,record=record) if record.dispatched_at and record.allocation.state=='substituted' else None
+    erp_form=SubstitutionErpForm(request.POST if action=='erp' else None)
+    cancel_form=SubstitutionCancelForm(request.POST if action=='cancel' else None)
+    form={'dispatch':dispatch_form,'settle':settlement_form,'erp':erp_form,'cancel':cancel_form}.get(action)
+    if request.method=='POST' and form and form.is_valid():
+        d=form.cleaned_data
+        try:
+            if action=='dispatch':dispatch_substitution(substitution_id=record.pk,shipped_at=d['shipped_at'],product_confirmed=d['product_confirmed'],actor=request.user)
+            elif action=='settle':settle_substitution(request_id=d['request_id'],substitution_id=record.pk,receipt_id=d['receipt'].pk,quantity=d['quantity'],note=d['note'],product_confirmed=d['product_confirmed'],actor=request.user)
+            elif action=='cancel':cancel_substitution(substitution_id=record.pk,note=d['note'],actor=request.user)
+            else:confirm_company_erp(substitution_id=record.pk,confirmed=d['decision']=='confirm',note=d['note'],actor=request.user)
+        except ValidationError as error:
+            form.add_error(None,error)
+            messages.error(request,' / '.join(error.messages))
+        else:
+            messages.success(request,{'cancel':'출고 전 대체 예약을 취소했습니다. 기록은 보존됩니다.','dispatch':'대체 출고했습니다. 실물 재고를 차감하고 미상환으로 기록했습니다.','settle':'입고분을 빌린 코드의 재고로 전환해 상환했습니다. 총수량은 유지됩니다.','erp':'회사 ERP 정산 확인을 기록했습니다. 재고 수량은 변경하지 않았습니다.'}[action])
+            return redirect('substitution-detail',pk=record.pk)
+    repaid=repaid_quantity(record)
+    return render(request,'inventory/substitution_detail.html',{'record':record,'repaid':repaid,'outstanding':record.allocation.quantity-repaid,'dispatch_form':dispatch_form,'cancel_form':cancel_form,'settlement_form':settlement_form,'erp_form':erp_form,'settlements':record.settlements.select_related('receipt','actor').order_by('created_at','pk')})
+
+
+@user_passes_test(lambda user:user.is_active and user.is_staff)
+def substitution_list(request):
+    from .models import Substitution,ErpSnapshot
+    from .substitutions import related_for_snapshot,repaid_quantity
+    rows=Substitution.objects.select_related('allocation__stock__item','allocation__order','created_by','erp_confirmed_by').order_by('-created_at','pk')
+    code=request.GET.get('code','').strip();order=request.GET.get('order','').strip();state=request.GET.get('state','')
+    snapshot=get_object_or_404(ErpSnapshot,pk=request.GET['snapshot']) if request.GET.get('snapshot') else None
+    if snapshot:rows=related_for_snapshot(snapshot).order_by('-created_at','pk')
+    if code:rows=rows.filter(Q(requested_code=code)|Q(actual_code=code))
+    if order:
+        from uuid import UUID
+        try:rows=rows.filter(allocation__order_id=UUID(order))
+        except ValueError:rows=rows.none()
+    if state in ['reserved','cancelled','substituted','settled']:rows=rows.filter(allocation__state=state)
+    else:state=''
+    page=Paginator(rows,50).get_page(request.GET.get('page'))
+    for record in page.object_list:
+        record.repaid=repaid_quantity(record,min(snapshot.created_at,snapshot.erp_as_of) if snapshot else None)
+        record.outstanding=record.allocation.quantity-record.repaid if record.dispatched_at and record.allocation.state!='cancelled' else 0
+    return render(request,'inventory/substitution_list.html',{'page_obj':page,'code':code,'order':order,'state':state,'snapshot':snapshot})

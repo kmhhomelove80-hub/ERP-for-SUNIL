@@ -1,5 +1,7 @@
 def event_summary(event):
     d = event.detail
+    if event.action.startswith('substitution_'):
+        return f"{d.get('requested_code','')} ← {d.get('actual_code','')}" + (f" · {d['quantity']}개" if 'quantity' in d else '') + f" · {d.get('note',d.get('reason',''))}"
     if event.action in ['movement','movement_requested']:
         source = d.get('source_location',d.get('location',''))
         destination = d.get('destination','')

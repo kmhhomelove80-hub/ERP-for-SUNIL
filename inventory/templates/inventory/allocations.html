@@ -1,5 +1,5 @@
 {% extends 'inventory/base.html' %}{% block content %}
-<h1>예약 / 선택 출고</h1><p><a href="{% url 'picking-list' %}">피킹 주문 이력</a> · <a href="{% url 'allocation-history' %}">전체 행별 거래</a></p><p>실물 입고와 실제 출고가 완료된 행만 선택해 Release하세요. 각 행의 전량을 처리하며, 미선택 예약은 유지합니다.</p>
+<h1>예약 / 선택 출고</h1><p class="notice">일반 배정만 표시합니다. 대체 배정은 <a href="{% url 'substitution-list' %}">빌림·상환 기록</a>에서 별도로 출고하세요.</p><p><a href="{% url 'picking-list' %}">피킹 주문 이력</a> · <a href="{% url 'allocation-history' %}">전체 행별 거래</a></p><p>실물 입고와 실제 출고가 완료된 행만 선택해 Release하세요. 각 행의 전량을 처리하며, 미선택 예약은 유지합니다.</p>
 <form class="filters"><input name="q" aria-label="프로젝트 필터" value="{{ query }}" placeholder="프로젝트 / 호선"><input name="seq" aria-label="SEQ 필터" value="{{ seq }}" placeholder="SEQ / 주문 ID"><button>필터 조회</button></form>
 <p>필터 결과 <strong>{{ total }}행</strong> · 현재 페이지 {{ allocations|length }}행. 체크박스는 Shift+클릭으로 범위를 선택할 수 있습니다.</p>
 <form method="post">{% csrf_token %}{{ form.non_field_errors }}{{ form.allocations.errors }}<input type="hidden" name="filter_token" value="{{ filter_token }}">

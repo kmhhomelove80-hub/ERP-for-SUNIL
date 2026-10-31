@@ -38,7 +38,8 @@ PostgreSQL에는 ERP_DB_NAME, ERP_DB_USER, ERP_DB_PASSWORD 및 선택적으로 E
 | /receipts/new/ | 입고·예정 등록 |
 | /receipts/bulk/ | A~E열 붙여넣기/Excel 일괄 입고 |
 | /picking/new/ | 수량·ERP 코드 또는 고객 6열 입력/배정/부족표 |
-| /allocations/ | 프로젝트·SEQ 필터/Shift 선택/필터 전체 Release·취소 |
+| /allocations/ | 일반 배정 프로젝트·SEQ 필터/Shift 선택/필터 전체 Release·취소 |
+| /substitutions/ | 대체 출고(빌림)·생산 입고분 상환·회사 ERP 정산 확인 |
 | /movements/ | 본인 이동 요청/관리자 처리 |
 | /erp/ | ERP 자료 업로드·대조·원인/조치 |
 | /history/ | 새 시스템 작업 이력 |

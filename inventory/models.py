@@ -49,7 +49,7 @@ class Allocation(models.Model):
     project = models.CharField('프로젝트/호선', max_length=250)
     legacy_seq = models.CharField('기존 SEQ', max_length=40, blank=True)
     quantity = models.PositiveIntegerField()
-    state = models.CharField(max_length=12, choices=[('reserved','예약'),('released','출고 확정'),('cancelled','취소')], default='reserved')
+    state = models.CharField(max_length=12, choices=[('reserved','예약'),('released','출고 확정'),('cancelled','취소'),('substituted','대체 출고·미상환'),('settled','대체 상환 완료')], default='reserved')
     shipped_at = models.DateTimeField(null=True, blank=True)
     released_at = models.DateTimeField(null=True, blank=True)
     cancelled_at = models.DateTimeField(null=True,blank=True)
@@ -104,6 +104,7 @@ class Receipt(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     payload = models.JSONField(default=dict)
     transferred_at = models.DateTimeField(null=True,blank=True)
+    arrival_stock = models.ForeignKey(Stock,on_delete=models.PROTECT,null=True,blank=True,related_name='arrived_receipts')
     cancelled_at = models.DateTimeField(null=True,blank=True)
     cancelled_by = models.ForeignKey(settings.AUTH_USER_MODEL,on_delete=models.PROTECT,null=True,blank=True,related_name='cancelled_receipts')
     cancellation_reason = models.TextField(blank=True)
@@ -164,3 +165,37 @@ class LegacyArchiveRecord(models.Model):
     payload = models.JSONField(default=dict)
     class Meta:
         constraints = [models.UniqueConstraint(fields=['batch','kind','source_row'],name='unique_archive_source_row')]
+
+
+class Substitution(models.Model):
+    """One immutable requested-to-actual link per physical allocation."""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    allocation = models.OneToOneField(Allocation, on_delete=models.PROTECT, related_name='substitution')
+    requested_code = models.CharField('고객/회사 ERP 요청 코드', max_length=100)
+    actual_code = models.CharField('실물 출고 코드', max_length=100)
+    reason = models.CharField('대체 사유', max_length=1000)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name='created_substitutions')
+    created_at = models.DateTimeField(auto_now_add=True)
+    dispatched_at = models.DateTimeField(null=True, blank=True)
+    settled_at = models.DateTimeField(null=True, blank=True)
+    erp_confirmed_at = models.DateTimeField(null=True, blank=True)
+    erp_confirmed_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True, related_name='confirmed_substitutions')
+    erp_note = models.CharField(max_length=1000, blank=True)
+    class Meta:
+        constraints = [models.CheckConstraint(condition=~Q(requested_code=F('actual_code')), name='substitution_different_codes')]
+
+
+class SubstitutionSettlement(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    substitution = models.ForeignKey(Substitution,on_delete=models.PROTECT,related_name='settlements')
+    receipt = models.ForeignKey(Receipt,on_delete=models.PROTECT,related_name='substitution_settlements')
+    source_stock = models.ForeignKey(Stock,on_delete=models.PROTECT,related_name='settlements_from')
+    target_stock = models.ForeignKey(Stock,on_delete=models.PROTECT,related_name='settlements_to')
+    quantity = models.PositiveIntegerField()
+    location = models.CharField(max_length=150)
+    note = models.CharField(max_length=1000)
+    product_confirmed = models.BooleanField(default=False)
+    actor = models.ForeignKey(settings.AUTH_USER_MODEL,on_delete=models.PROTECT)
+    created_at = models.DateTimeField(auto_now_add=True)
+    class Meta:
+        constraints = [models.CheckConstraint(condition=Q(quantity__gt=0),name='positive_substitution_settlement')]

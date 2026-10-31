@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import Item, Stock, Allocation, MovementRequest, AuditEvent, ImportBatch, Receipt, PickingOrder, ErpSnapshot, ReconciliationRow, LegacyArchiveBatch, LegacyArchiveRecord
+from .models import Item, Stock, Allocation, MovementRequest, AuditEvent, ImportBatch, Receipt, PickingOrder, ErpSnapshot, ReconciliationRow, LegacyArchiveBatch, LegacyArchiveRecord, Substitution, SubstitutionSettlement
 @admin.register(Item)
 class ItemAdmin(admin.ModelAdmin):
     list_display = ['code','name']
@@ -14,5 +14,5 @@ class ReadOnlyAdmin(admin.ModelAdmin):
     def has_add_permission(self, request): return False
     def has_change_permission(self, request, obj=None): return False
     def has_delete_permission(self, request, obj=None): return False
-for model in [Stock, Allocation, MovementRequest, AuditEvent, ImportBatch, Receipt, PickingOrder, ErpSnapshot, ReconciliationRow, LegacyArchiveBatch, LegacyArchiveRecord]:
+for model in [Stock, Allocation, MovementRequest, AuditEvent, ImportBatch, Receipt, PickingOrder, ErpSnapshot, ReconciliationRow, LegacyArchiveBatch, LegacyArchiveRecord, Substitution, SubstitutionSettlement]:
     admin.site.register(model, ReadOnlyAdmin)

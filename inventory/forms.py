@@ -1,6 +1,6 @@
 import uuid
 from django import forms
-from .models import Item, Stock
+from .models import Item, Stock, Receipt
 
 class ReceiptForm(forms.Form):
     request_id = forms.UUIDField(widget=forms.HiddenInput, initial=uuid.uuid4)
@@ -81,7 +81,7 @@ class MovementProcessForm(forms.Form):
 
 class HistoryFilterForm(forms.Form):
     q = forms.CharField(label='검색',required=False,max_length=100)
-    action = forms.ChoiceField(label='작업 종류',required=False,choices=[('','전체'),('initial_import','초기 이관'),('receipt','입고'),('receipt_batch','일괄 입고'),('receipt_cancel','입고 취소'),('arrival','도착 확인'),('reserve','예약'),('cancel','예약 취소'),('release','출고 확정'),('picking_confirm','피킹 등록'),('movement_requested','이동 요청'),('movement','이동 처리'),('erp_snapshot','ERP 대조 등록'),('reconciliation_review','차이 분석 기록'),('legacy_archive','과거 이력 보관 이관')])
+    action = forms.ChoiceField(label='작업 종류',required=False,choices=[('','전체'),('initial_import','초기 이관'),('receipt','입고'),('receipt_batch','일괄 입고'),('substitution_reserved','대체 예약'),('substitution_dispatch','대체 출고(빌림)'),('substitution_settlement','입고분 상환'),('substitution_cancel','대체 예약 취소'),('substitution_erp','회사 ERP 정산 확인'),('receipt_cancel','입고 취소'),('arrival','도착 확인'),('reserve','예약'),('cancel','예약 취소'),('release','출고 확정'),('picking_confirm','피킹 등록'),('movement_requested','이동 요청'),('movement','이동 처리'),('erp_snapshot','ERP 대조 등록'),('reconciliation_review','차이 분석 기록'),('legacy_archive','과거 이력 보관 이관')])
     start = forms.DateField(label='시작일',required=False,widget=forms.DateInput(attrs={'type':'date'}))
     end = forms.DateField(label='종료일',required=False,widget=forms.DateInput(attrs={'type':'date'}))
     def clean(self):
@@ -138,3 +138,60 @@ class BulkReceiptForm(forms.Form):
         try: data['rows'] = parse_receipts(pasted=data.get('pasted_rows',''), upload=data.get('file'))
         except forms.ValidationError as error: self.add_error(None,error)
         return data
+
+
+class SubstituteStockChoice(forms.ModelChoiceField):
+    def label_from_instance(self, stock):
+        return f'{stock.item.code} | {stock.item.name} | {stock.location} | 가용 {stock.available}'
+
+
+class SubstitutionForm(forms.Form):
+    request_id=forms.UUIDField(widget=forms.HiddenInput,initial=uuid.uuid4)
+    requested=forms.ChoiceField(label='고객 요청 코드')
+    stock=SubstituteStockChoice(label='빌릴 제품 / 위치',queryset=Stock.objects.none())
+    quantity=forms.IntegerField(label='빌릴 수량',min_value=1,max_value=2147483647)
+    reason=forms.CharField(label='대체 사유',max_length=1000,widget=forms.Textarea(attrs={'rows':3}))
+    confirmed=forms.BooleanField(label='요청 코드와 빌릴 코드·위치·수량을 확인했습니다.')
+    def __init__(self,*args,order,**kwargs):
+        super().__init__(*args,**kwargs)
+        from .substitutions import demand_balance
+        from django.db.models import F
+        rows=[r for r in demand_balance(order) if r['shortage']]
+        self.fields['requested'].choices=[(r['code'],f"{r['code']} · 미배정 {r['shortage']}") for r in rows]
+        self.fields['stock'].queryset=Stock.objects.select_related('item').filter(warehouse='Y09',quantity__gt=F('reserved')).order_by('item__code','location','pk')
+
+
+class SubstitutionDispatchForm(forms.Form):
+    shipped_at=forms.DateTimeField(label='실제 대체 출고 시각 (한국 시간)',widget=forms.DateTimeInput(attrs={'type':'datetime-local'}))
+    product_confirmed=forms.BooleanField(label='동일 제품이거나 필요한 수정을 완료했고, 실제 대체품이 출고됐습니다.')
+
+
+class ReceiptSettlementChoice(forms.ModelChoiceField):
+    def label_from_instance(self, receipt):
+        stock=receipt.arrival_stock or receipt.stock
+        return f'{receipt.created_at:%Y-%m-%d} | {stock.item.code} | {stock.location} | 미사용 {receipt.quantity-receipt.settlement_used} / 현재 가용 {stock.available} | {str(receipt.pk)[:8]}'
+
+
+class SubstitutionSettlementForm(forms.Form):
+    request_id=forms.UUIDField(widget=forms.HiddenInput,initial=uuid.uuid4)
+    receipt=ReceiptSettlementChoice(label='상환에 사용할 요청 코드 입고 건',queryset=Receipt.objects.none())
+    quantity=forms.IntegerField(label='상환 수량',min_value=1,max_value=2147483647)
+    note=forms.CharField(label='상환 근거 / 제품 수정 내용',max_length=1000,widget=forms.Textarea(attrs={'rows':3}))
+    product_confirmed=forms.BooleanField(label='입고품이 빌린 제품과 동일하거나 필요한 수정을 완료했으며, 입고 위치에서 보충 재고로 전환합니다.')
+    def __init__(self,*args,record,**kwargs):
+        super().__init__(*args,**kwargs)
+        from .models import Receipt
+        from django.db.models import Q, F, Sum
+        self.fields['receipt'].queryset=Receipt.objects.select_related('stock__item','arrival_stock__item').filter(cancelled_at__isnull=True,stock__item__code=record.requested_code).filter(
+            Q(arrival_stock__isnull=True,stock__status='received',created_at__gte=record.allocation.shipped_at)|Q(arrival_stock__isnull=False,transferred_at__gte=record.allocation.shipped_at)).annotate(settlement_used=Sum('substitution_settlements__quantity',default=0)).filter(settlement_used__lt=F('quantity')).filter(Q(arrival_stock__isnull=True,stock__quantity__gt=F('stock__reserved'))|Q(arrival_stock__quantity__gt=F('arrival_stock__reserved'))).order_by('-created_at','pk')
+
+
+class SubstitutionErpForm(forms.Form):
+    decision=forms.ChoiceField(label='회사 ERP 정산 확인',choices=[('confirm','회사 ERP 코드·수량 정리 확인'),('undo','확인 취소')])
+    note=forms.CharField(label='확인 / 확인 취소 근거',max_length=1000,widget=forms.Textarea(attrs={'rows':3}))
+    confirmed=forms.BooleanField(label='회사 ERP 자료를 확인했습니다. 이 작업은 재고 수량을 변경하지 않습니다.')
+
+
+class SubstitutionCancelForm(forms.Form):
+    note=forms.CharField(label='대체 예약 취소 사유',max_length=1000,widget=forms.Textarea(attrs={'rows':2}))
+    confirmed=forms.BooleanField(label='아직 실물 대체 출고 전이며 예약만 취소합니다.')

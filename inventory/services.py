@@ -47,6 +47,9 @@ def release_selected(*, allocation_ids, shipped_at, actor):
     if len(allocations) != len(ids) or any(a.state != 'reserved' for a in allocations):
         raise ValidationError('모든 대상이 유효한 예약이어야 합니다.')
     stocks = {s.pk:s for s in Stock.objects.select_for_update().filter(pk__in=[a.stock_id for a in allocations]).order_by('pk')}
+    from .models import Substitution
+    if Substitution.objects.filter(allocation_id__in=ids).exists():
+        raise ValidationError('대체 배정은 일반 Release할 수 없습니다. 피킹의 대체 출고(빌림)를 사용하세요.')
     if any(s.status != Stock.Status.RECEIVED for s in stocks.values()):
         raise ValidationError('입고 완료 후 실제 출고한 물량만 Release할 수 있습니다.')
     for a in allocations:
@@ -155,7 +158,7 @@ def confirm_arrival(*, stock_id, location, actor):
     target.save(update_fields=['quantity','reserved'])
     Allocation.objects.filter(stock=source,state='reserved').update(stock=target)
     from .models import Receipt
-    Receipt.objects.filter(stock=source,cancelled_at__isnull=True,transferred_at__isnull=True).update(transferred_at=timezone.now())
+    Receipt.objects.filter(stock=source,cancelled_at__isnull=True,transferred_at__isnull=True).update(transferred_at=timezone.now(),arrival_stock=target)
     audit(actor,'arrival',source.pk,target=target.pk,quantity=qty,reserved=reserved,code=source.item.code,source_location=source.location,destination=location)
     return target
 
@@ -176,6 +179,7 @@ def cancel_receipt(*, receipt_id, reason, actor):
     if receipt.cancelled_at:return receipt
     reason=reason.strip()
     if not reason:raise ValidationError('입고 취소 사유를 입력하세요.')
+    if receipt.substitution_settlements.exists():raise ValidationError('상환에 사용한 입고 원거래는 취소할 수 없습니다.')
     if receipt.transferred_at:raise ValidationError('도착 확인으로 위치가 전환된 예정 입고는 원거래 취소할 수 없습니다.')
     stock=Stock.objects.select_for_update().select_related('item').get(pk=receipt.stock_id)
     if stock.available<receipt.quantity:raise ValidationError('예약·출고·이동 등으로 취소 가능한 가용 수량이 부족합니다.')

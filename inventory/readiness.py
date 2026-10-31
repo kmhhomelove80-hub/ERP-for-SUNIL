@@ -4,7 +4,7 @@ from django.db import connection,DatabaseError
 from django.db.migrations.executor import MigrationExecutor
 from django.db.models import Sum
 from django.utils import timezone
-from .models import Stock,Allocation
+from .models import Stock,Allocation,Substitution
 from .locking import warehouse_lock
 
 def readiness_report(deployment=False):
@@ -21,6 +21,18 @@ def readiness_report(deployment=False):
             totals={row['stock_id']:row['total'] for row in Allocation.objects.filter(state='reserved').values('stock_id').annotate(total=Sum('quantity'))}
             mismatch=sum(s.reserved!=totals.get(s.pk,0) for s in Stock.objects.all())
             add('reservations','error' if mismatch else 'ok','예약 수량 대조',f'불일치 {mismatch}개' if mismatch else '원장 allocated와 활성 예약 합계 일치')
+            from .substitutions import repaid_quantity
+            invalid=0
+            for record in Substitution.objects.select_related('allocation').prefetch_related('settlements'):
+                repaid=repaid_quantity(record);a=record.allocation
+                valid=(0<=repaid<=a.quantity)
+                if a.state in ['reserved','cancelled']:valid=valid and not record.dispatched_at and repaid==0
+                elif a.state=='substituted':valid=valid and bool(record.dispatched_at) and repaid<a.quantity and not record.settled_at
+                elif a.state=='settled':valid=valid and bool(record.dispatched_at) and repaid==a.quantity and bool(record.settled_at)
+                else:valid=False
+                if not valid:invalid+=1
+            invalid+=Allocation.objects.filter(state__in=['substituted','settled'],substitution__isnull=True).count()
+            add('substitutions','error' if invalid else 'ok','빌림·상환 대조',f'불일치 {invalid}건' if invalid else '대체 출고 상태와 상환 합계 일치')
             expected=Stock.objects.filter(status='expected',quantity__gt=0)
             unknown=expected.filter(expected_date__isnull=True).count()
             late=expected.filter(expected_date__lt=timezone.localdate()).count()

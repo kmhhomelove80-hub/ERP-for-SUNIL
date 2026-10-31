@@ -36,9 +36,11 @@ def parse_customer(*, pasted='', upload=None):
 def customer_print_groups(order):
     customer = order.payload.get('customer_rows', [])
     pools = {}
-    for allocation in order.allocations.select_related('stock__item').exclude(state='cancelled').order_by('stock_id','pk'):
+    for allocation in order.allocations.select_related('stock__item','substitution').exclude(state='cancelled').order_by('stock_id','pk'):
         detail = allocation.display_details
-        pools.setdefault(detail['code'], []).append([detail['location'], allocation.quantity, detail['status']])
+        from .substitutions import requested_code
+        actual=detail['code'] if hasattr(allocation,'substitution') else ''
+        pools.setdefault(requested_code(allocation), []).append([detail['location'], allocation.quantity, detail['status'],actual])
     groups=[]
     # Match the original N/O merged blocks. Non-adjacent repeated codes stay in
     # their original order and consume the remaining saved allocation pool.
@@ -48,9 +50,10 @@ def customer_print_groups(order):
         for entry in pools.get(code,[]):
             take=min(entry[1],remaining)
             if take:
-                locations[entry[0]]=locations.get(entry[0],0)+take
+                key=(entry[0],entry[3])
+                locations[key]=locations.get(key,0)+take
                 expected=expected or entry[2]=='expected'
                 entry[1]-=take;remaining-=take
             if not remaining:break
-        groups.append(dict(rows=rows,total=total,locations=[dict(location=k,quantity=v) for k,v in locations.items()],shortage=remaining,expected=expected))
+        groups.append(dict(rows=rows,total=total,locations=[dict(location=k[0],quantity=v,**({'actual_code':k[1]} if k[1] else {})) for k,v in locations.items()],shortage=remaining,expected=expected))
     return groups

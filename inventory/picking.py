@@ -53,12 +53,13 @@ def plan_picking(rows):
     return {'allocations':allocations,'shortages':shortages}
 
 @warehouse_transaction
-def confirm_picking(*, request_id, project, rows, preview, allow_shortage, actor, customer_rows=None):
+def confirm_picking(*, request_id, project, rows, preview, allow_shortage, actor, customer_rows=None, substitution_draft=False):
     project = project.strip()
     if not project or len(project)>250: raise ValidationError('프로젝트/호선 이름이 필요합니다.')
     # Normalize again at the service boundary, not only in HTML forms.
     normalized = parse_paste('\n'.join(f"{r['code']}\t{r['quantity']}" for r in rows))
     payload = {'project':project,'rows':normalized}
+    if substitution_draft: payload['substitution_draft']=True
     if customer_rows:
         from .customer_picking import parse_customer
         customer_rows = parse_customer(pasted='\n'.join('\t'.join(str(r[k]) for k in ['por','hull','block','name','quantity','code']) for r in customer_rows))
@@ -73,7 +74,7 @@ def confirm_picking(*, request_id, project, rows, preview, allow_shortage, actor
     current = plan_picking(normalized)
     if current != preview:
         raise ValidationError('재고 또는 위치가 변경되었습니다. 배정 미리보기를 다시 확인하세요.')
-    if not current['allocations']: raise ValidationError('예약 가능한 수량이 없습니다.')
+    if not current['allocations'] and not (substitution_draft and allow_shortage): raise ValidationError('예약 가능한 수량이 없습니다. 전량 부족이면 대체 배정용 주문으로 등록하세요.')
     if current['shortages'] and not allow_shortage:
         raise ValidationError('부족 수량을 확인하고 부분 배정 동의에 체크하세요.')
     order = PickingOrder.objects.create(id=request_id,project=project,actor=actor,payload=payload,shortages=current['shortages'])
