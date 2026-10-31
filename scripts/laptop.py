@@ -69,6 +69,7 @@ def main():
         if not PYTHON.exists():
             venv.EnvBuilder(with_pip=True).create(VENV)
         run(['-m', 'pip', 'install', '-r', 'requirements.txt'])
+        run(['manage.py', 'prepare_laptop_upgrade'])
         run(['manage.py', 'migrate', '--noinput'])
         if not REAL:
             run(['manage.py', 'seed_laptop_demo'])

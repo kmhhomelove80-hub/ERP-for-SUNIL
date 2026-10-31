@@ -70,3 +70,5 @@ Windows의 chmod는 POSIX 600/700과 같은 ACL 보장을 제공하지 않는다
 ```powershell
 powershell.exe -NoProfile -File C:\SUNIL\ERP\deploy\windows\Inspect-Server.ps1
 ```
+
+개발 환경 추가 점검: Microsoft 공식 PowerShell 7.6.9 Linux 배포의 체크섬을 검증한 뒤 위 PS1 6개의 구문 분석을 통과했다. 이는 Windows PowerShell 5.1에서의 실제 실행, DPAPI·ACL·스케줄러·SMB 검증을 대신하지 않는다.
