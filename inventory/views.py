@@ -525,3 +525,18 @@ def substitution_list(request):
         record.repaid=repaid_quantity(record,min(snapshot.created_at,snapshot.erp_as_of) if snapshot else None)
         record.outstanding=record.allocation.quantity-record.repaid if record.dispatched_at and record.allocation.state!='cancelled' else 0
     return render(request,'inventory/substitution_list.html',{'page_obj':page,'code':code,'order':order,'state':state,'snapshot':snapshot})
+
+
+@login_required
+def stock_allocations(request, pk):
+    from django.http import HttpResponseNotAllowed
+    from .models import Allocation
+    from .locking import warehouse_lock
+    if request.method not in ['GET','HEAD']:return HttpResponseNotAllowed(['GET','HEAD'])
+    with warehouse_lock():
+        stock=get_object_or_404(Stock.objects.select_related('item'),pk=pk)
+        rows=Allocation.objects.filter(stock=stock,state='reserved').select_related('order__actor','substitution').order_by('project','legacy_seq','pk')
+        total=rows.aggregate(quantity=Sum('quantity'))['quantity'] or 0
+        page=Paginator(rows,30).get_page(request.GET.get('page'))
+        list(page.object_list)  # Evaluate inside the same snapshot as the totals.
+    return render(request,'inventory/stock_allocations.html',{'stock':stock,'page_obj':page,'allocated_total':total,'matches':total==stock.reserved})

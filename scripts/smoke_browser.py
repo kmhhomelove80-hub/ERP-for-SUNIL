@@ -81,6 +81,13 @@ w=Workbook();s=w.active;s.title='ERP재고';s.append(['창고','ERP 코드','현
             login(phone,'browser-mobile')
             assert phone.locator('.mobile-stock-cards').get_by_text('DEMO-LAMP-001',exact=False).count()==1
             phone.screenshot(path=str(artifacts/'mobile-stock.png'),full_page=True)
+            phone.get_by_role('link',name='4개 할당 내역',exact=True).click()
+            assert phone.get_by_role('heading',name='할당 프로젝트 확인',exact=True).is_visible()
+            assert phone.get_by_text('검증용 호선',exact=True).is_visible()
+            assert phone.locator('.movement-cards').get_by_text('4개',exact=True).is_visible()
+            assert phone.evaluate('document.documentElement.scrollWidth <= innerWidth')
+            phone.screenshot(path=str(artifacts/'mobile-allocation-projects.png'),full_page=True)
+            phone.get_by_role('link',name='재고 조회로',exact=True).click()
             phone.get_by_role('link',name='이동 요청',exact=True).click()
             phone.get_by_label('이동할 위치',exact=False).fill('B0202')
             phone.get_by_label('요청 수량',exact=False).fill('5')
@@ -92,6 +99,18 @@ w=Workbook();s=w.active;s.title='ERP재고';s.append(['창고','ERP 코드','현
             assert phone.evaluate('document.documentElement.scrollWidth <= innerWidth')
             phone.screenshot(path=str(artifacts/'mobile-request.png'),full_page=True)
             login(pc,'browser-admin')
+            manager_phone=desktop.new_page();manager_phone.set_viewport_size({'width':390,'height':844})
+            manager_phone.goto(base+'/')
+            assert manager_phone.locator('header .desktop-only').count()==6
+            assert manager_phone.locator('header .desktop-only').evaluate_all("nodes=>nodes.every(e=>getComputedStyle(e).display==='none')")
+            assert not manager_phone.get_by_role('link',name='현재 검색 전체 엑셀 내보내기',exact=True).is_visible()
+            manager_phone.set_viewport_size({'width':844,'height':390})
+            assert manager_phone.locator('header .desktop-only').evaluate_all("nodes=>nodes.every(e=>getComputedStyle(e).display==='none')")
+            assert manager_phone.locator('.mobile-stock-cards').is_visible()
+            manager_phone.set_viewport_size({'width':390,'height':844});manager_phone.goto(detail)
+            assert not manager_phone.get_by_role('button',name='확인 후 처리',exact=True).is_visible()
+            assert manager_phone.get_by_text('이동 요청의 재고 반영은 관리자 PC에서 처리합니다.',exact=True).is_visible()
+            manager_phone.close()
             pc.goto(detail)
             pc.screenshot(path=str(artifacts/'desktop-process.png'),full_page=True)
             pc.get_by_label('대상 요청과 수량을 확인했습니다.',exact=False).check()
@@ -185,7 +204,7 @@ w=Workbook();s=w.active;s.title='ERP재고';s.append(['창고','ERP 코드','현
             assert book.active['H2'].value==2
             book.close()
             assert not errors,errors
-            report={'mobile_viewport':'390x844','desktop_viewport':'1440x1000','mobile_submit_admin_process_mobile_result':True,'no_mobile_detail_page_horizontal_overflow':True,'history_search':True,'picking_paste_confirm_and_pdf':True,'javascript_errors':errors,'synthetic_data_only':True,'erp_upload_compare_review':True,'y02_shortage_reference':True,'receipt_create_and_cancel':True,'operational_reservation_check':True,'completed_order_survives_master_edit':True,'stock_and_erp_excel_downloads':True,'server':'waitress' if args.waitress else 'runserver'}
+            report={'mobile_allocation_project_details':True,'mobile_manager_menus_and_processing_hidden':True,'portrait_and_landscape_mobile_layout':True,'mobile_viewport':'390x844','desktop_viewport':'1440x1000','mobile_submit_admin_process_mobile_result':True,'no_mobile_detail_page_horizontal_overflow':True,'history_search':True,'picking_paste_confirm_and_pdf':True,'javascript_errors':errors,'synthetic_data_only':True,'erp_upload_compare_review':True,'y02_shortage_reference':True,'receipt_create_and_cancel':True,'operational_reservation_check':True,'completed_order_survives_master_edit':True,'stock_and_erp_excel_downloads':True,'server':'waitress' if args.waitress else 'runserver'}
             (artifacts/'result.json').write_text(json.dumps(report,ensure_ascii=False,indent=2))
             print(json.dumps(report,ensure_ascii=False,indent=2))
             browser.close()

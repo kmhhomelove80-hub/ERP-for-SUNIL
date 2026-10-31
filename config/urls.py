@@ -20,6 +20,7 @@ urlpatterns = [
     path('movements/',views.movement_list,name='movement-list'),
     path('movements/<uuid:pk>/',views.movement_detail,name='movement-detail'),
     path('stock/export/',views.stock_export,name='stock-export'),
+    path('stock/<int:pk>/allocations/',views.stock_allocations,name='stock-allocations'),
     path('stock/<int:pk>/move/',views.movement_create,name='movement-create'),
     path('archives/',views.archive_list,name='archive-list'),
     path('operations/',views.operations_status,name='operations-status'),
