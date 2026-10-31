@@ -10,6 +10,7 @@ def event_summary(event):
     if event.action=='erp_snapshot': return f"{d.get('label','')} · {d.get('rows',0)}행 대조"
     if event.action=='reconciliation_review': return f"{d.get('warehouse','')} · {d.get('reason','')} · {d.get('action_note','')}"
     if event.action=='receipt_cancel': return f"{d.get('location','')} · {d.get('reason','')}"
+    if event.action == 'receipt_batch': return f"일괄 입고 {d.get('count',0)}행 · 총 {d.get('quantity',0)}개"
     if event.action == 'receipt':
         return f"{d.get('location','')} · " + ('입고 예정 등록' if d.get('status')=='expected' else '입고 등록')
     if event.action == 'arrival':

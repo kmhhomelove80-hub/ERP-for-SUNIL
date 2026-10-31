@@ -21,7 +21,7 @@ def stock_list(request):
     from .reconciliation import latest_reference
     reference,erp_snapshot=latest_reference('Y09',[s.item.code for s in page.object_list])
     for stock in page.object_list:stock.erp_pending=reference.get(stock.item.code,{}).get('shipping_pending')
-    return render(request,'inventory/stock_list.html',{'page_obj':page, 'query':query,'status':status,'totals':totals,'statuses':Stock.Status.choices,'erp_snapshot':erp_snapshot})
+    return render(request,'inventory/stock_results.html' if request.GET.get('partial')=='1' else 'inventory/stock_list.html',{'page_obj':page, 'query':query,'status':status,'totals':totals,'statuses':Stock.Status.choices,'erp_snapshot':erp_snapshot})
 
 @user_passes_test(lambda user: user.is_active and user.is_staff)
 def receipt_create(request):
@@ -53,12 +53,12 @@ def picking_create(request):
     from django.core import signing
     from .forms import PickingInputForm, PickingConfirmForm
     from .picking import plan_picking, confirm_picking
-    input_form = PickingInputForm(request.POST if request.method == 'POST' and request.POST.get('action') == 'preview' else None)
+    input_form = PickingInputForm(request.POST if request.method == 'POST' and request.POST.get('action') == 'preview' else None, request.FILES or None)
     preview, confirm_form = None, None
     if request.method == 'POST' and request.POST.get('action') == 'preview' and input_form.is_valid():
         d = input_form.cleaned_data
         preview = plan_picking(d['pasted_rows'])
-        payload = dict(actor=request.user.pk,request_id=str(d['request_id']),project=d['project'],rows=d['pasted_rows'],preview=preview)
+        payload = dict(actor=request.user.pk,request_id=str(d['request_id']),project=d['project'],rows=d['pasted_rows'],preview=preview,customer_rows=d.get('customer_details',[]))
         token = signing.dumps(payload,salt='picking-preview',compress=True)
         confirm_form = PickingConfirmForm(initial={'preview_token':token})
     elif request.method == 'POST' and request.POST.get('action') == 'confirm':
@@ -67,9 +67,14 @@ def picking_create(request):
             try:
                 payload = signing.loads(confirm_form.cleaned_data['preview_token'],salt='picking-preview',max_age=1800)
                 if payload['actor'] != request.user.pk: raise ValidationError('다른 사용자의 미리보기입니다.')
-                input_form = PickingInputForm(initial={'request_id':payload['request_id'],'project':payload['project'],'pasted_rows':'\n'.join(f"{r['code']}\t{r['quantity']}" for r in payload['rows'])})
+                initial={'request_id':payload['request_id'],'project':payload['project']}
+                if payload.get('customer_rows'):
+                    initial['customer_rows']='\n'.join('\t'.join(str(r[k]) for k in ['por','hull','block','name','quantity','code']) for r in payload['customer_rows'])
+                else:
+                    initial['pasted_rows']='\n'.join(f"{r['quantity']}\t{r['code']}" for r in payload['rows'])
+                input_form = PickingInputForm(initial=initial)
                 from uuid import UUID
-                order = confirm_picking(request_id=UUID(payload['request_id']),project=payload['project'],rows=payload['rows'],preview=payload['preview'],allow_shortage=confirm_form.cleaned_data['allow_shortage'],actor=request.user)
+                order = confirm_picking(request_id=UUID(payload['request_id']),project=payload['project'],rows=payload['rows'],preview=payload['preview'],allow_shortage=confirm_form.cleaned_data['allow_shortage'],actor=request.user,customer_rows=payload.get('customer_rows',[]))
             except (signing.BadSignature,ValidationError) as error:
                 messages.error(request,' / '.join(error.messages) if isinstance(error,ValidationError) else '미리보기가 만료되었거나 유효하지 않습니다. 다시 계산하세요.')
                 confirm_form = None
@@ -87,22 +92,42 @@ def picking_detail(request, pk):
 
 @user_passes_test(lambda user: user.is_active and user.is_staff)
 def allocation_list(request):
+    from django.core import signing
     from .models import Allocation
     from .forms import AllocationActionForm
     from .services import release_selected, cancel_selected
-    form = AllocationActionForm(request.POST or None)
-    if request.method == 'POST' and form.is_valid():
-        data = form.cleaned_data
-        ids = list(data['allocations'].values_list('pk',flat=True))
+    query=request.GET.get('q','').strip()
+    seq=request.GET.get('seq','').strip()
+    rows=Allocation.objects.filter(state='reserved').select_related('stock__item','order').order_by('project','legacy_seq','stock__item__code','pk')
+    if query: rows=rows.filter(project__icontains=query)
+    if seq: rows=rows.filter(Q(legacy_seq__icontains=seq)|Q(order__id__icontains=seq))
+    form=AllocationActionForm(request.POST or None)
+    form.fields['allocations'].queryset=rows
+    if request.method=='POST' and form.is_valid():
+        data=form.cleaned_data
+        ids=list(data['allocations'].values_list('pk',flat=True))
         try:
-            if data['action'] == 'release': release_selected(allocation_ids=ids,shipped_at=data['shipped_at'],actor=request.user)
+            if request.POST.get('scope')=='filtered':
+                payload=signing.loads(request.POST.get('filter_token',''),salt='allocation-filter',max_age=1800)
+                if payload['actor']!=request.user.pk or payload['q']!=query or payload['seq']!=seq:
+                    raise ValidationError('필터가 변경되었습니다. 다시 조회하세요.')
+                ids=payload['ids']
+                if set(map(str,rows.values_list('pk',flat=True)))!=set(ids):
+                    raise ValidationError('필터 결과가 변경되었습니다. 다시 조회하고 대상 행을 확인하세요.')
+            if not ids: raise ValidationError('처리할 행을 선택하세요.')
+            if data['action']=='release': release_selected(allocation_ids=ids,shipped_at=data['shipped_at'],actor=request.user)
             else: cancel_selected(allocation_ids=ids,actor=request.user)
-        except ValidationError as error: form.add_error(None,error)
+        except (signing.BadSignature,ValidationError) as error:
+            form.add_error(None,error if isinstance(error,ValidationError) else '필터 미리보기가 만료되었습니다. 다시 조회하세요.')
         else:
             messages.success(request,f'{len(ids)}개 예약 행을 처리했습니다.')
-            return redirect('allocation-list')
-    rows = Allocation.objects.filter(state='reserved').select_related('stock__item','order').order_by('project','stock__item__code','pk')
-    return render(request,'inventory/allocations.html',{'form':form,'allocations':rows,'selected_ids':request.POST.getlist('allocations')})
+            from django.urls import reverse
+            from urllib.parse import urlencode
+            return redirect(reverse('allocation-list')+'?'+urlencode({'q':query,'seq':seq}))
+    ids=list(map(str,rows.values_list('pk',flat=True)))
+    token=signing.dumps(dict(actor=request.user.pk,q=query,seq=seq,ids=ids),salt='allocation-filter',compress=True)
+    page=Paginator(rows,50).get_page(request.GET.get('page'))
+    return render(request,'inventory/allocations.html',{'form':form,'allocations':page,'page_obj':page,'query':query,'seq':seq,'total':len(ids),'filter_token':token,'selected_ids':request.POST.getlist('allocations')})
 
 @login_required
 def movement_create(request, pk):
@@ -187,13 +212,13 @@ def erp_template(request):
 def erp_upload(request):
     from django.core import signing
     from .forms import ErpUploadForm,ErpConfirmForm
-    from .reconciliation import inspect_erp_file,create_snapshot
+    from .reconciliation import inspect_erp_file,inspect_erp_exports,create_snapshot
     upload_form=ErpUploadForm(request.POST if request.method=='POST' and request.POST.get('action')=='preview' else None,request.FILES or None)
     preview,confirm_form=None,None
     if request.method=='POST' and request.POST.get('action')=='preview' and upload_form.is_valid():
         d=upload_form.cleaned_data
-        try: plan=inspect_erp_file(d['file'],d['layout'])
-        except ValidationError as error:upload_form.add_error('file',error)
+        try: plan=inspect_erp_exports({'Y09':d['y09_file'],'Y02':d['y02_file']}) if d['layout']=='export' else inspect_erp_file(d['file'],d['layout'])
+        except ValidationError as error:upload_form.add_error(None,error)
         else:
             preview=[]
             for warehouse in ['Y09','Y02']:
@@ -367,3 +392,47 @@ def erp_export(request,pk):
     response=HttpResponse(data,content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
     response['Content-Disposition']=f'attachment; filename="erp_comparison_{warehouse}.xlsx"'
     return response
+
+
+@user_passes_test(lambda user:user.is_active and user.is_staff)
+def customer_picking_print(request, pk):
+    from .models import PickingOrder
+    from .customer_picking import customer_print_groups
+    order=get_object_or_404(PickingOrder,pk=pk)
+    return render(request,'inventory/customer_picking_print.html',{'order':order,'groups':customer_print_groups(order)})
+
+
+@user_passes_test(lambda user:user.is_active and user.is_staff)
+def receipt_bulk(request):
+    from django.core import signing
+    from .forms import BulkReceiptForm, ErpConfirmForm
+    from .bulk_receipts import receive_batch
+    form=BulkReceiptForm(request.POST if request.POST.get('action')=='preview' else None,request.FILES or None)
+    preview, confirm_form = None, None
+    if request.method=='POST' and request.POST.get('action')=='preview' and form.is_valid():
+        d=form.cleaned_data
+        preview=d['rows']
+        from .models import Item
+        existing={i.code:i for i in Item.objects.filter(code__in=[r['code'] for r in preview])}
+        warnings=[]
+        for r in preview:
+            item=existing.get(r['code'])
+            if item and (item.name!=r['name'] or item.specification!=r['specification']):
+                warnings.append(r['code'])
+        payload=dict(actor=request.user.pk,request_id=str(d['request_id']),rows=preview)
+        confirm_form=ErpConfirmForm(initial={'preview_token':signing.dumps(payload,salt='receipt-batch',compress=True)})
+        confirm_form.fields['confirmed'].label='행별 수량·Location과 기존 품목 설명 유지 안내를 확인했습니다.'
+    elif request.method=='POST' and request.POST.get('action')=='confirm':
+        confirm_form=ErpConfirmForm(request.POST)
+        if confirm_form.is_valid():
+            try:
+                from uuid import UUID
+                payload=signing.loads(confirm_form.cleaned_data['preview_token'],salt='receipt-batch',max_age=1800)
+                if payload['actor']!=request.user.pk: raise ValidationError('다른 사용자의 미리보기입니다.')
+                receive_batch(request_id=UUID(payload['request_id']),rows=payload['rows'],actor=request.user)
+            except (signing.BadSignature,ValidationError) as error:
+                confirm_form.add_error(None,error if isinstance(error,ValidationError) else '미리보기가 만료되었거나 유효하지 않습니다.')
+            else:
+                messages.success(request,f"{len(payload['rows'])}개 행을 일괄 입고했습니다.")
+                return redirect('receipt-list')
+    return render(request,'inventory/receipt_bulk.html',{'form':form,'preview':preview,'confirm_form':confirm_form,'warnings':locals().get('warnings',[])})

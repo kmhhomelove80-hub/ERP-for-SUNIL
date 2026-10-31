@@ -1,0 +1,8 @@
+{% extends 'inventory/base.html' %}{% block content %}
+<h1>엑셀 일괄 입고</h1><p><a href="{% url 'receipt-list' %}">입고 원거래</a></p>
+<p class="notice">A~E열: 품목코드 · 품목명 · 사양 · 수량 · Location. 각 행을 입고 완료로 등록합니다. 기존 예정 물량의 도착 확인과 중복 등록하지 마세요. 신규 코드는 품목을 생성하고, 기존 코드의 모델·사양은 덮어쓰지 않습니다.</p>
+<form method="post" enctype="multipart/form-data" class="card entry">{% csrf_token %}{{ form.as_p }}<button name="action" value="preview">입고 미리보기</button></form>
+{% if preview %}<h2>{{ preview|length }}행 입고 미리보기</h2>{% if warnings %}<p class="notice">기존 품목 설명과 다른 코드: {{ warnings|join:', ' }}. 기존 모델·사양은 유지됩니다.</p>{% endif %}
+<div class="table"><table><tr><th>ERP 코드</th><th>품목명</th><th>사양</th><th>수량</th><th>Location</th></tr>{% for row in preview %}<tr><td>{{ row.code }}</td><td class="wrap">{{ row.name }}</td><td class="wrap">{{ row.specification }}</td><td>{{ row.quantity }}</td><td>{{ row.location }}</td></tr>{% endfor %}</table></div>{% endif %}
+{% if confirm_form %}<form method="post" class="card">{% csrf_token %}{{ confirm_form.as_p }}<button name="action" value="confirm">전체 행 일괄 입고</button></form>{% endif %}
+{% endblock %}

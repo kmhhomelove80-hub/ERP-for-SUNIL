@@ -117,3 +117,30 @@ def update_review(*, row_id, state, reason, action_note, actor):
     row.save(update_fields=['review_state','reason','action_note','updated_by','updated_at'])
     audit(actor,'reconciliation_review',row.pk,code=row.code,warehouse=row.warehouse,state=state,reason=row.reason,action_note=row.action_note,before=previous)
     return row
+
+
+def inspect_erp_exports(files):
+    """User's ERP exports are CP949 tab-separated text named .xls."""
+    from .tabular import read_table, cell, integer
+    rows, digests, names = [], [], []
+    for warehouse, upload in files.items():
+        if upload is None: continue
+        raw, content = read_table(upload)
+        headers = [cell(v) for v in raw[0]] if raw else []
+        required = ['품목코드','품목명','현재고','출하대기']
+        if any(headers.count(h) != 1 for h in required):
+            raise ValidationError(f'{warehouse}: 품목코드·품목명·현재고·출하대기 헤더가 필요합니다.')
+        indexes = {h:headers.index(h) for h in required}
+        for number, row in enumerate(raw[1:], 2):
+            if not any(cell(v) for v in row): continue
+            if len(row) <= max(indexes.values()):
+                raise ValidationError(f'{warehouse} {number}행: 열이 누락됐습니다.')
+            code = cell(row[indexes['품목코드']])
+            if not code and cell(row[0]) == '합계': continue
+            if not code: raise ValidationError(f'{warehouse} {number}행: 품목코드가 없습니다.')
+            rows.append(dict(warehouse=warehouse, code=code, name=cell(row[indexes['품목명']]),
+                             quantity=integer(row[indexes['현재고']]), shipping_pending=integer(row[indexes['출하대기']])))
+        digests.append(warehouse+':'+hashlib.sha256(content).hexdigest())
+        names.append(warehouse+':'+str(upload.name).replace('\\','/').split('/')[-1])
+    validate_rows(rows)
+    return dict(rows=rows, digest=hashlib.sha256('|'.join(digests).encode()).hexdigest(), source_name=' / '.join(names)[:255])

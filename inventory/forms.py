@@ -23,10 +23,29 @@ class ArrivalForm(forms.Form):
 class PickingInputForm(forms.Form):
     request_id = forms.UUIDField(widget=forms.HiddenInput, initial=uuid.uuid4)
     project = forms.CharField(label='프로젝트 / 호선', max_length=250)
-    pasted_rows = forms.CharField(label='ERP 코드 · 수량 붙여넣기', max_length=100000, widget=forms.Textarea(attrs={'rows':12,'placeholder':'ERP001\t10\nERP002\t5'}),help_text='엑셀의 두 열을 복사하세요. 헤더 없이 최대 500행, 중복 품번은 합산합니다.')
+    pasted_rows = forms.CharField(required=False,label='수량 · ERP 코드 붙여넣기', max_length=100000, widget=forms.Textarea(attrs={'rows':12,'placeholder':'10\tERP001\n5\tERP002'}),help_text='수량 → ERP 코드 순서로 엑셀의 두 열을 복사하세요. 헤더 없이 최대 500행, 중복 품번은 합산합니다.')
     def clean_pasted_rows(self):
-        from .picking import parse_paste
-        return parse_paste(self.cleaned_data['pasted_rows'])
+        from .picking import parse_quantity_code
+        text = self.cleaned_data['pasted_rows']
+        return parse_quantity_code(text) if text.strip() else []
+    customer_rows = forms.CharField(label='고객 자료 6열 붙여넣기', required=False, max_length=300000, widget=forms.Textarea(attrs={'rows':8}), help_text='POR번호·호선·블록·품명·수량·ERP CODE. 기존 두 열 대신 사용하면 고객 양식도 인쇄할 수 있습니다.')
+    customer_file = forms.FileField(label='또는 고객 자료 Excel 파일 (.xlsx / .xlsm)', required=False)
+    def clean(self):
+        data = super().clean()
+        from .customer_picking import parse_customer
+        try:
+            customer = parse_customer(pasted=data.get('customer_rows',''), upload=data.get('customer_file')) if data.get('customer_rows') or data.get('customer_file') else []
+            if customer and data.get('pasted_rows'):
+                raise forms.ValidationError('두 열 입력과 고객 자료 입력 중 하나만 사용하세요.')
+            if not customer and not data.get('pasted_rows'):
+                raise forms.ValidationError('피킹 자료를 입력하세요.')
+            if customer:
+                from .picking import parse_paste
+                data['pasted_rows'] = parse_paste('\n'.join(f"{r['code']}\t{r['quantity']}" for r in customer))
+            data['customer_details'] = customer
+        except forms.ValidationError as error:
+            self.add_error(None,error)
+        return data
 
 class PickingConfirmForm(forms.Form):
     preview_token = forms.CharField(widget=forms.HiddenInput,max_length=500000)
@@ -34,7 +53,7 @@ class PickingConfirmForm(forms.Form):
 
 class AllocationActionForm(forms.Form):
     from .models import Allocation
-    allocations = forms.ModelMultipleChoiceField(label='대상 행',queryset=Allocation.objects.filter(state='reserved'),widget=forms.CheckboxSelectMultiple)
+    allocations = forms.ModelMultipleChoiceField(label='대상 행',required=False,queryset=Allocation.objects.filter(state='reserved'),widget=forms.CheckboxSelectMultiple)
     action = forms.ChoiceField(label='처리',choices=[('release','실제 출고 완료 → Release'),('cancel','예약 취소')])
     shipped_at = forms.DateTimeField(label='실제 출고 시각 (한국 시간)',required=False,widget=forms.DateTimeInput(attrs={'type':'datetime-local'}))
     confirmed = forms.BooleanField(label='선택한 행과 수량을 확인했으며, 각 행의 전량을 처리합니다.')
@@ -62,7 +81,7 @@ class MovementProcessForm(forms.Form):
 
 class HistoryFilterForm(forms.Form):
     q = forms.CharField(label='검색',required=False,max_length=100)
-    action = forms.ChoiceField(label='작업 종류',required=False,choices=[('','전체'),('initial_import','초기 이관'),('receipt','입고'),('receipt_cancel','입고 취소'),('arrival','도착 확인'),('reserve','예약'),('cancel','예약 취소'),('release','출고 확정'),('picking_confirm','피킹 등록'),('movement_requested','이동 요청'),('movement','이동 처리'),('erp_snapshot','ERP 대조 등록'),('reconciliation_review','차이 분석 기록'),('legacy_archive','과거 이력 보관 이관')])
+    action = forms.ChoiceField(label='작업 종류',required=False,choices=[('','전체'),('initial_import','초기 이관'),('receipt','입고'),('receipt_batch','일괄 입고'),('receipt_cancel','입고 취소'),('arrival','도착 확인'),('reserve','예약'),('cancel','예약 취소'),('release','출고 확정'),('picking_confirm','피킹 등록'),('movement_requested','이동 요청'),('movement','이동 처리'),('erp_snapshot','ERP 대조 등록'),('reconciliation_review','차이 분석 기록'),('legacy_archive','과거 이력 보관 이관')])
     start = forms.DateField(label='시작일',required=False,widget=forms.DateInput(attrs={'type':'date'}))
     end = forms.DateField(label='종료일',required=False,widget=forms.DateInput(attrs={'type':'date'}))
     def clean(self):
@@ -76,14 +95,20 @@ class ErpUploadForm(forms.Form):
     request_id = forms.UUIDField(widget=forms.HiddenInput,initial=uuid.uuid4)
     label = forms.CharField(label='자료 이름',max_length=150)
     erp_as_of = forms.DateTimeField(label='회사 ERP 자료 기준 시각 (한국 시간)',initial=timezone.now,widget=forms.DateTimeInput(format='%Y-%m-%dT%H:%M',attrs={'type':'datetime-local'}))
-    layout = forms.ChoiceField(label='파일 형식',choices=[('standard','표준 ERP재고 양식'),('legacy','기존 SUNIL 파일의 재고현황 시트')])
-    file = forms.FileField(label='ERP 재고 파일 (.xlsx / .xlsm)')
+    layout = forms.ChoiceField(label='파일 형식',choices=[('export','ERP 직접 추출 y09.xls / y02.xls'),('standard','표준 ERP재고 양식'),('legacy','기존 SUNIL 파일의 재고현황 시트')])
+    file = forms.FileField(label='기존/표준 ERP 재고 파일 (.xlsx / .xlsm)',required=False)
+    y09_file = forms.FileField(label='Y09 부산 ERP 추출 파일 (.xls)',required=False)
+    y02_file = forms.FileField(label='Y02 영주 ERP 추출 파일 (.xls)',required=False)
     confirmed_mapping = forms.BooleanField(label='기존 형식의 I:R은 Y02, W:AF는 Y09임을 확인했습니다.',required=False)
     def clean(self):
         data=super().clean()
         if data.get('layout')=='legacy' and not data.get('confirmed_mapping'):
             self.add_error('confirmed_mapping','기존 형식의 창고 배치를 확인하세요.')
-        if data.get('file') and data['file'].size>10*1024*1024:
+        if data.get('layout')=='export' and not (data.get('y09_file') or data.get('y02_file')):
+            self.add_error(None,'Y09 또는 Y02 추출 파일을 선택하세요. 두 파일을 함께 등록할 수 있습니다.')
+        if data.get('layout')!='export' and not data.get('file'):
+            self.add_error('file','파일을 선택하세요.')
+        if any(data.get(k) and data[k].size>10*1024*1024 for k in ['file','y09_file','y02_file']):
             self.add_error('file','10MB 이하 파일을 사용하세요.')
         return data
 
@@ -101,3 +126,15 @@ class ReviewForm(forms.Form):
 class ReceiptCancelForm(forms.Form):
     reason = forms.CharField(label='입고 취소 사유',max_length=1000,widget=forms.Textarea(attrs={'rows':3}))
     confirmed = forms.BooleanField(label='원거래와 전량 취소 수량을 확인했습니다.')
+
+
+class BulkReceiptForm(forms.Form):
+    request_id = forms.UUIDField(widget=forms.HiddenInput, initial=uuid.uuid4)
+    pasted_rows = forms.CharField(label='A~E열 붙여넣기', required=False, max_length=500000, widget=forms.Textarea(attrs={'rows':12}), help_text='품목코드·품목명·사양·수량·Location 순서입니다.')
+    file = forms.FileField(label='또는 입고 Excel 파일 (.xlsx / .xlsm)', required=False)
+    def clean(self):
+        data = super().clean()
+        from .bulk_receipts import parse_receipts
+        try: data['rows'] = parse_receipts(pasted=data.get('pasted_rows',''), upload=data.get('file'))
+        except forms.ValidationError as error: self.add_error(None,error)
+        return data

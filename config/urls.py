@@ -11,6 +11,7 @@ urlpatterns = [
     path('picking/',views.picking_list,name='picking-list'),
     path('allocation-history/',views.allocation_history,name='allocation-history'),
     path('picking/new/',views.picking_create,name='picking-create'),
+    path('picking/<uuid:pk>/customer/',views.customer_picking_print,name='customer-picking-print'),
     path('picking/<uuid:pk>/',views.picking_detail,name='picking-detail'),
     path('allocations/',views.allocation_list,name='allocation-list'),
     path('movements/',views.movement_list,name='movement-list'),
@@ -28,6 +29,7 @@ urlpatterns = [
     path('erp/rows/<int:pk>/review/',views.erp_review,name='erp-review'),
     path('receipts/',views.receipt_list,name='receipt-list'),
     path('receipts/<uuid:pk>/cancel/',views.receipt_cancel,name='receipt-cancel'),
+    path('receipts/bulk/',views.receipt_bulk,name='receipt-bulk'),
     path('receipts/new/',views.receipt_create,name='receipt-create'),
     path('stock/<int:pk>/arrival/',views.arrival_confirm,name='arrival-confirm'),
 ]

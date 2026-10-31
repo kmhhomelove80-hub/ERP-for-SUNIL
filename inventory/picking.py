@@ -53,12 +53,18 @@ def plan_picking(rows):
     return {'allocations':allocations,'shortages':shortages}
 
 @warehouse_transaction
-def confirm_picking(*, request_id, project, rows, preview, allow_shortage, actor):
+def confirm_picking(*, request_id, project, rows, preview, allow_shortage, actor, customer_rows=None):
     project = project.strip()
     if not project or len(project)>250: raise ValidationError('프로젝트/호선 이름이 필요합니다.')
     # Normalize again at the service boundary, not only in HTML forms.
     normalized = parse_paste('\n'.join(f"{r['code']}\t{r['quantity']}" for r in rows))
     payload = {'project':project,'rows':normalized}
+    if customer_rows:
+        from .customer_picking import parse_customer
+        customer_rows = parse_customer(pasted='\n'.join('\t'.join(str(r[k]) for k in ['por','hull','block','name','quantity','code']) for r in customer_rows))
+        customer_totals = parse_paste('\n'.join(f"{r['code']}\t{r['quantity']}" for r in customer_rows))
+        if customer_totals != normalized: raise ValidationError('고객 자료와 요청 수량이 일치하지 않습니다.')
+        payload['customer_rows'] = customer_rows
     previous = PickingOrder.objects.filter(pk=request_id).first()
     if previous:
         if previous.actor_id != actor.pk or previous.payload != payload:
@@ -79,3 +85,20 @@ def confirm_picking(*, request_id, project, rows, preview, allow_shortage, actor
         audit(actor,'reserve',allocation.pk,stock=stock.pk,quantity=row['quantity'],order=str(order.pk),code=row['code'],project=project)
     audit(actor,'picking_confirm',order.pk,shortages=current['shortages'],project=project)
     return order
+
+
+def parse_quantity_code(text):
+    """Public two-column input: quantity first, ERP code second."""
+    lines=[line.strip() for line in text.splitlines() if line.strip()]
+    if not 1<=len(lines)<=500:
+        raise ValidationError('1~500행의 수량·ERP 코드를 붙여넣으세요.')
+    swapped=[]
+    for number,line in enumerate(lines,1):
+        columns=line.split('\t') if '\t' in line else line.split()
+        if len(columns)!=2:
+            raise ValidationError(f'{number}행: 수량·ERP 코드 두 열 순서로 입력하세요.')
+        quantity,code=[v.strip() for v in columns]
+        if not quantity.isascii() or not quantity.isdecimal():
+            raise ValidationError(f'{number}행: 첫 열은 양의 정수 수량, 두 번째 열은 ERP 코드입니다.')
+        swapped.append(code+'\t'+quantity)
+    return parse_paste('\n'.join(swapped))

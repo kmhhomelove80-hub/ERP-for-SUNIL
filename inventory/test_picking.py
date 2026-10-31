@@ -60,7 +60,7 @@ class PickingTests(TestCase):
     def test_signed_preview_web_flow_and_tamper_rejection(self):
         self.client.force_login(self.user)
         url = reverse('picking-create')
-        response = self.client.post(url,{'action':'preview','project':'호선1','request_id':str(uuid.uuid4()),'pasted_rows':'CODE1\t10'})
+        response = self.client.post(url,{'action':'preview','project':'호선1','request_id':str(uuid.uuid4()),'pasted_rows':'10\tCODE1'})
         self.assertContains(response,'위치별 배정 미리보기')
         token = response.context['confirm_form']['preview_token'].value()
         self.assertFalse(PickingOrder.objects.exists())

@@ -15,3 +15,5 @@ backups/
 .laptop-venv/
 laptop-data/
 laptop-real-data/
+
+*.xls
