@@ -24,22 +24,20 @@ def read_book(data, name):
     if name.lower().endswith('.xlsb'):
         checked_zip(data).close()
         from pyxlsb import open_workbook
-        import tempfile
-        with tempfile.NamedTemporaryFile(suffix='.xlsb') as f:
-            f.write(data); f.flush()
-            with open_workbook(f.name) as w:
-                result = {}
-                for sheet in w.sheets:
-                    with w.get_sheet(sheet) as s:
-                        rows = []
-                        for row in s.rows():
-                            if not row: continue
-                            while len(rows) <= row[0].r: rows.append([])
-                            values = [None] * (max(c.c for c in row) + 1)
-                            for c in row: values[c.c] = c.v
-                            rows[row[0].r] = values
-                        result[sheet] = rows
-                return result
+        # 메모리에서 직접 열어 Windows 임시 파일 공유 잠금을 피합니다.
+        with open_workbook(io.BytesIO(data)) as w:
+            result = {}
+            for sheet in w.sheets:
+                with w.get_sheet(sheet) as s:
+                    rows = []
+                    for row in s.rows():
+                        if not row: continue
+                        while len(rows) <= row[0].r: rows.append([])
+                        values = [None] * (max(c.c for c in row) + 1)
+                        for c in row: values[c.c] = c.v
+                        rows[row[0].r] = values
+                    result[sheet] = rows
+            return result
     if not name.lower().endswith(('.xlsx', '.xlsm')):
         raise ValueError('기준 파일은 XLSB, XLSX, XLSM 또는 해당 파일을 담은 ZIP을 지원합니다.')
     checked_zip(data).close()
