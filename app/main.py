@@ -15,7 +15,7 @@ from openpyxl import Workbook
 
 ROOT=Path(__file__).parent
 STORE=Store(ROOT.parent/'data/workspace.sqlite3')
-app=FastAPI(title='선일 수주관리',version='2.0')
+app=FastAPI(title='선일 수주관리',version='2.1')
 
 @app.exception_handler(ValueError)
 async def value_error(request,exc):
@@ -152,3 +152,60 @@ def save_ref(req:RefChange):
     stamp=timestamp()
     updated=rebuild({**old,'book':book,'history':(old.get('history',[])+[{'at':stamp,'target':'REF '+('거래처' if req.kind=='customers' else 'SET')+' 저장'}])[-100:]})
     return metadata(STORE.commit(updated,req.revision))
+
+# 출고내역은 확정 시점의 값을 별도 원장에 누적합니다.
+from .shipments import Shipments, STATUSES
+import hashlib
+
+def shipment_store():return Shipments(STORE.path)
+
+class ShipmentConfirm(Extraction):
+    request_key:str=Field(min_length=16,max_length=100)
+
+@app.post('/api/shipments/confirm')
+def confirm_shipments(req:ShipmentConfirm):
+    signature=hashlib.sha256(req.model_dump_json(exclude={'request_key'}).encode()).hexdigest()
+    ledger=shipment_store()
+    previous=ledger.existing(req.request_key,signature)
+    if previous:return previous
+    # 계산 중 원본이 교체되는 것을 막고 확정 당시 결과를 저장
+    with STORE.lock:
+        result,_=extraction(req)
+        return ledger.confirm(req.request_key,signature,req.yard,result['rows'])
+
+@app.get('/api/shipments')
+def list_shipments(q:str='',yard:str='',status:str='',date_from:str='',date_to:str=''):
+    if status and status not in STATUSES:raise ValueError('출고 상태를 확인하세요.')
+    rows=shipment_store().rows(q,yard,status,date_from,date_to)
+    return {'rows':rows,'headers':HEADERS+['공급가액','부가세','합계금액'],'count':len(rows),'quantity':sum(r['values'][4] or 0 for r in rows),'statuses':STATUSES}
+
+class ShipmentUpdate(BaseModel):
+    ids:list[int]=Field(min_length=1,max_length=20000)
+    status:Literal['pending','shortage','erp_completed']|None=None
+    memo:str|None=Field(default=None,max_length=2000)
+
+@app.post('/api/shipments/status')
+def update_shipments(req:ShipmentUpdate):
+    return {'updated':shipment_store().update(req.ids,req.status,req.memo)}
+
+@app.get('/api/shipments/download')
+def download_shipments(q:str='',yard:str='',status:str='',date_from:str='',date_to:str=''):
+    rows=shipment_store().rows(q,yard,status,date_from,date_to)
+    w=Workbook();w.remove(w.active)
+    s=styled_sheet(w,'출고내역',['확정일시','조선소','상태',*HEADERS,'공급가액','부가세','합계금액','메모'],[[r['created'],r['yard'],STATUSES[r['status']],*r['values'],r['memo']] for r in rows])
+    from openpyxl.styles import PatternFill
+    for i,r in enumerate(rows,2):
+        color={'shortage':'FF0000','erp_completed':'FFFF00'}.get(r['status'])
+        if color:
+            for c in s[i]:c.fill=PatternFill('solid',fgColor=color)
+        for col in [8,10,16,17,18]:s.cell(i,col).number_format='#,##0'
+    # 같은 확정 묶음 안의 연속 품목별 합계만 병합합니다.
+    start=2
+    for i,r in enumerate(rows):
+        group=(r['batch_id'],text(r['values'][5]).casefold(),r['values'][6])
+        next_group=None if i==len(rows)-1 else (rows[i+1]['batch_id'],text(rows[i+1]['values'][5]).casefold(),rows[i+1]['values'][6])
+        if group!=next_group:
+            if i+2>start:s.merge_cells(start_row=start,start_column=10,end_row=i+2,end_column=10)
+            start=i+3
+    out=io.BytesIO();w.save(out)
+    return excel(out.getvalue(),'shipment-history.xlsx')
