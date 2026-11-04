@@ -18,6 +18,9 @@ CLASSIFICATIONS=ClassificationStore()
 @app.get('/',response_class=HTMLResponse)
 def home():return (ROOT/'static/index.html').read_text()
 
+@app.get('/favicon.ico', include_in_schema=False)
+def favicon():return Response(status_code=204)
+
 async def upload_bytes(file):
     data=await file.read(25*1024*1024+1)
     if len(data)>25*1024*1024:raise ValueError('파일은 각각 25MB까지 업로드할 수 있습니다.')
@@ -38,7 +41,11 @@ async def upload(workbook:UploadFile=File(...),erp_file:UploadFile|None=File(Non
             SESSIONS[token]={'book':book,'external':external,'erp':erp,'expires':time.time()+TTL}
         return {'session':token,'erp_count':len(erp),'available':[n for n in [*ADAPTERS,'중소'] if n=='중소' or n in book],'sheets':list(book),'unclassified':sorted({r[0] for r in erp if r[1]=='미분류'}),'classifications':[{'customer':k,'name':v[0],'category':v[1]} for k,v in CLASSIFICATIONS.all().items()]}
     except (ValueError,KeyError,ImportError) as e:raise HTTPException(400,str(e))
-    except Exception:raise HTTPException(400,'파일을 읽지 못했습니다. 지원 형식과 압축 파일 구성을 확인하세요.')
+    except PermissionError:raise HTTPException(400,'파일 접근 권한 오류입니다. 프로그램 폴더와 임시 폴더의 쓰기 권한을 확인하세요.')
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).exception('엑셀 업로드 처리 실패')
+        raise HTTPException(400,f'파일을 읽지 못했습니다 ({type(e).__name__}). 터미널의 오류 내용을 확인해 주세요.')
 
 class Criteria(BaseModel):
     por:str=Field(default='',max_length=200)
