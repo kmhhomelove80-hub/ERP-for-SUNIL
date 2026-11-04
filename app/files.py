@@ -61,3 +61,24 @@ def read_erp(data, name):
         except UnicodeDecodeError:
             pass
     raise ValueError('ERP 파일 인코딩을 읽을 수 없습니다.')
+
+def read_raw(data,name,target):
+    """단일 야드 RAW 또는 ERP 원본. 머리글 위치는 서비스에서 확인."""
+    if name.lower().endswith(('.xlsx','.xlsm','.xlsb','.zip')):
+        book=read_book(data,name)
+        if target in book:return book[target]
+        if len(book)==1:return next(iter(book.values()))
+        raise ValueError(f'여러 시트가 있습니다. {target} 이름의 시트 또는 단일 시트 파일을 사용하세요.')
+    if data.startswith(bytes.fromhex('d0cf11e0')):
+        import xlrd
+        w=xlrd.open_workbook(file_contents=data)
+        s=w.sheet_by_name(target) if target in w.sheet_names() else w.sheet_by_index(0)
+        return [[xlrd.xldate_as_datetime(c.value,w.datemode).date().isoformat() if c.ctype==xlrd.XL_CELL_DATE else c.value for c in s.row(i)] for i in range(s.nrows)]
+    for encoding in ('utf-8-sig','cp949'):
+        try:
+            content=data.decode(encoding)
+            if content.lstrip().lower().startswith(('<html','<!doctype')):raise ValueError('HTML 형식 XLS는 Excel에서 XLSX로 저장한 뒤 업로드하세요.')
+            delimiter='\t' if '\t' in content.splitlines()[0] else ','
+            return list(csv.reader(io.StringIO(content),delimiter=delimiter))
+        except UnicodeDecodeError:pass
+    raise ValueError('원본 파일을 읽지 못했습니다.')

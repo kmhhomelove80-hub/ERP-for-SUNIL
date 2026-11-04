@@ -29,7 +29,8 @@ def day(v):
     for fmt in ('%Y-%m-%d','%Y/%m/%d','%m/%d/%Y','%y.%m.%d','%Y.%m.%d'):
         try: return datetime.strptime(text(v),fmt).date().isoformat()
         except ValueError: pass
-    raise ValueError(f'날짜 형식을 확인하세요: {text(v)}')
+    try:return datetime.fromisoformat(text(v)).date().isoformat()
+    except ValueError:raise ValueError(f'날짜 형식을 확인하세요: {text(v)}')
 
 @dataclass(frozen=True)
 class Adapter:
@@ -104,7 +105,8 @@ def build_source(book, erp, name):
         return [[r[8],r[2],r[3],r[17],r[12],r[9],None,None,r[10],r[11],None,r[16]] for r in erp if r[1]=='중소'], []
     if name not in ADAPTERS: raise ValueError('이 조선소는 아직 처리 규칙이 준비되지 않았습니다.')
     a=ADAPTERS[name]; rows=book.get(name,[])
-    if len(rows)<=a.header: raise ValueError(f'{name} 시트에 원본 데이터가 없습니다.')
+    if len(rows)<a.header: raise ValueError(f'{name} 시트의 원본 머리글이 없습니다.')
+    if len(rows)==a.header:return [],[]
     emap={}; smap={}; warnings=[]
     for r in erp:
         if r[8]: emap.setdefault(text(r[8]),r)

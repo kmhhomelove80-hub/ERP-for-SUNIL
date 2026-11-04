@@ -2,131 +2,153 @@ from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.responses import HTMLResponse, Response
 from pathlib import Path
 from pydantic import BaseModel, Field
-from threading import Lock
-import io, time, secrets
+from typing import Literal
+import zipfile
+from copy import deepcopy
+import io, logging
+from .store import Store
+from .files import read_book, read_raw
+from .service import initialize, replace_raw, rebuild, filter_orders, timestamp, TARGETS
+from .engine import extract, HEADERS, ADAPTERS, text
+from .exporting import export_result, styled_sheet
 from openpyxl import Workbook
-from openpyxl.styles import Font, PatternFill, Alignment
-from .files import read_book, read_erp
-from .classifications import ClassificationStore
-from .engine import convert_erp, extract, ADAPTERS, ERP_HEADERS, HEADERS
 
-app=FastAPI(title='선일 납품리스트')
-SESSIONS={}; LOCK=Lock(); TTL=3600
 ROOT=Path(__file__).parent
-CLASSIFICATIONS=ClassificationStore()
+STORE=Store(ROOT.parent/'data/workspace.sqlite3')
+app=FastAPI(title='선일 수주관리',version='2.0')
+
+@app.exception_handler(ValueError)
+async def value_error(request,exc):
+    from fastapi.responses import JSONResponse
+    return JSONResponse(status_code=400,content={'detail':str(exc)})
+
+@app.exception_handler(zipfile.BadZipFile)
+async def bad_zip(request,exc):
+    from fastapi.responses import JSONResponse
+    return JSONResponse(status_code=400,content={'detail':'압축 또는 엑셀 파일을 읽지 못했습니다. 파일이 손상되지 않았는지 확인하세요.'})
 
 @app.get('/',response_class=HTMLResponse)
 def home():return (ROOT/'static/index.html').read_text()
-
-@app.get('/favicon.ico', include_in_schema=False)
+@app.get('/favicon.ico',include_in_schema=False)
 def favicon():return Response(status_code=204)
 
-async def upload_bytes(file):
+def current():
+    state=STORE.read()
+    if state is None:raise ValueError('업데이트 탭에서 최초 기준 ZIP을 등록하세요.')
+    return state
+
+def metadata(state):
+    if state is None:return {'initialized':False,'revision':0,'yards':[],'counts':{},'updates':{},'history':[],'warnings':[],'unclassified':[]}
+    counts={n:sum(r['yard']==n for r in state['orders']) for n in [*ADAPTERS,'중소']}
+    return {'initialized':True,'revision':state['revision'],'yards':list(counts),'counts':counts,'erp_count':len(state['erp']),'updates':state['updates'],'history':state.get('history',[])[-12:][::-1],'warnings':state['warnings'],'unclassified':state['unclassified']}
+
+@app.get('/api/state')
+def state():return metadata(STORE.read())
+
+async def bytes_of(file):
     data=await file.read(25*1024*1024+1)
-    if len(data)>25*1024*1024:raise ValueError('파일은 각각 25MB까지 업로드할 수 있습니다.')
+    if len(data)>25*1024*1024:raise ValueError('파일은 25MB 이하로 업로드하세요.')
+    if not data:raise ValueError('파일이 비어 있습니다.')
     return data
 
-@app.post('/api/upload')
-async def upload(workbook:UploadFile=File(...),erp_file:UploadFile|None=File(None)):
+@app.post('/api/initialize')
+async def init(file:UploadFile=File(...),revision:int=Form(0),confirm:bool=Form(False)):
+    if STORE.read() and not confirm:raise ValueError('전체 초기화는 기존 원본과 REF를 교체합니다. 확인 후 실행하세요.')
     try:
-        book=read_book(await upload_bytes(workbook),workbook.filename or '')
-        external=read_erp(await upload_bytes(erp_file),erp_file.filename or '') if erp_file and erp_file.filename else None
-        erp=convert_erp(book,external,CLASSIFICATIONS.all())
-        if not erp:raise ValueError('처리할 ERP 데이터가 없습니다.')
-        token=secrets.token_urlsafe(24)
-        with LOCK:
-            for k in list(SESSIONS):
-                if SESSIONS[k]['expires']<time.time():del SESSIONS[k]
-            if len(SESSIONS)>=8:raise ValueError('동시 작업 수가 많습니다. 잠시 후 다시 시도하세요.')
-            SESSIONS[token]={'book':book,'external':external,'erp':erp,'expires':time.time()+TTL}
-        return {'session':token,'erp_count':len(erp),'available':[n for n in [*ADAPTERS,'중소'] if n=='중소' or n in book],'sheets':list(book),'unclassified':sorted({r[0] for r in erp if r[1]=='미분류'}),'classifications':[{'customer':k,'name':v[0],'category':v[1]} for k,v in CLASSIFICATIONS.all().items()]}
-    except (ValueError,KeyError,ImportError) as e:raise HTTPException(400,str(e))
-    except PermissionError:raise HTTPException(400,'파일 접근 권한 오류입니다. 프로그램 폴더와 임시 폴더의 쓰기 권한을 확인하세요.')
+        book=read_book(await bytes_of(file),file.filename or '')
+        # 이전 버전에서 사용자가 등록한 거래처 분류도 최초 가져오기에 반영
+        from .classifications import ClassificationStore
+        saved=ClassificationStore().all()
+        refs=book.get('REF',[])
+        positions={text(r[0]):i for i,r in enumerate(refs) if r and i>0}
+        for customer,(name,category) in saved.items():
+            row=[customer,name,category]
+            if customer in positions:refs[positions[customer]][:3]=row
+            elif refs:refs.append(row)
+        result=STORE.commit(initialize(book),revision)
+        return metadata(result)
+    except (ValueError,HTTPException):raise
     except Exception as e:
-        import logging
-        logging.getLogger(__name__).exception('엑셀 업로드 처리 실패')
-        raise HTTPException(400,f'파일을 읽지 못했습니다 ({type(e).__name__}). 터미널의 오류 내용을 확인해 주세요.')
+        logging.exception('최초 자료 읽기 실패')
+        raise ValueError(f'엑셀을 읽지 못했습니다 ({type(e).__name__}). 파일 형식을 확인하세요.')
 
-class Criteria(BaseModel):
+@app.post('/api/update/{target}')
+async def update(target:str,file:UploadFile=File(...),revision:int=Form(...)):
+    old=current()
+    rows=read_raw(await bytes_of(file),file.filename or '',target)
+    result=replace_raw(old,target,rows)
+    return metadata(STORE.commit(result,revision))
+
+@app.get('/api/orders')
+def orders(yard:str='',q:str='',por:str='',hull:str='',code:str='',block:str='',destination:str='',date_from:str='',date_to:str='',page:int=1,page_size:int=100):
+    if page<1 or page_size not in (50,100,200):raise ValueError('페이지 범위가 올바르지 않습니다.')
+    state=current();rows=list(filter_orders(state,yard,q,por,hull,code,block,destination,date_from,date_to))
+    start=(page-1)*page_size
+    return {'headers':['조선소',*HEADERS],'total':len(rows),'quantity':sum(r['values'][4] or 0 for r in rows),'rows':rows[start:start+page_size],'revision':state['revision']}
+
+@app.get('/api/orders/download')
+def orders_download(yard:str='',q:str='',por:str='',hull:str='',code:str='',block:str='',destination:str='',date_from:str='',date_to:str=''):
+    rows=list(filter_orders(current(),yard,q,por,hull,code,block,destination,date_from,date_to))
+    w=Workbook();w.remove(w.active);styled_sheet(w,'수주현황',['조선소',*HEADERS],[[r['yard'],*r['values']] for r in rows]);out=io.BytesIO();w.save(out)
+    return excel(out.getvalue(),'orders.xlsx')
+
+class Criterion(BaseModel):
     por:str=Field(default='',max_length=200)
     block:str=Field(default='',max_length=200)
-class Request(BaseModel):
-    session:str
-    shipyard:str
-    criteria:list[Criteria]=Field(default_factory=list,max_length=5000)
+class Extraction(BaseModel):
+    yard:Literal['HMD','HHI','HSHI','중소']
+    criteria:list[Criterion]=Field(default_factory=list,max_length=5000)
+    revision:int
 
-def process(req):
-    with LOCK:
-        s=SESSIONS.get(req.session)
-        if not s or s['expires']<time.time():raise HTTPException(410,'작업이 만료되었습니다. 파일을 다시 올려 주세요.')
-    try:return extract(s['book'],s['erp'],req.shipyard,[{'por':c.por.strip(),'block':c.block.strip()} for c in req.criteria]),s
-    except (ValueError,KeyError) as e:raise HTTPException(400,str(e))
+def extraction(req):
+    state=current()
+    if req.revision!=state['revision']:raise ValueError('자료가 변경됐습니다. 최신 자료로 다시 추출하세요.')
+    return extract(state['book'],state['erp'],req.yard,[{'por':c.por.strip(),'block':c.block.strip()} for c in req.criteria]),state
 
-@app.post('/api/preview')
-def preview(req:Request):
-    result,_=process(req)
-    return {k:v for k,v in result.items() if k not in ('source_rows','rows')} | {'rows':result['rows'][:300],'preview_limit':300}
+@app.post('/api/extract')
+def preview(req:Extraction):
+    result,state=extraction(req)
+    # 미리보기를 중간에서 자르지 않아 합계 병합 구간이 끊기지 않음
+    return {k:v for k,v in result.items() if k!='source_rows'} | {'revision':state['revision']}
+@app.post('/api/extract/download')
+def download(req:Extraction):
+    result,state=extraction(req)
+    return excel(export_result(result,state['erp']),'delivery-list.xlsx')
+def excel(data,name):return Response(data,media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',headers={'Content-Disposition':f'attachment; filename="{name}"'})
 
-def safe_value(v):
-    # 문자열이 다운로드 파일에서 수식으로 해석되는 것 방지
-    return "'"+v if isinstance(v,str) and v.startswith(('=','+','-','@')) else v
+@app.get('/api/ref')
+def refs(kind:Literal['customers','sets']='customers',q:str='',page:int=1):
+    if page<1:raise ValueError('페이지 범위가 올바르지 않습니다.')
+    state=current();source=state['book']['REF' if kind=='customers' else 'SET'];rows=[]
+    for i,r in enumerate(source[1:],1):
+        values=(r+[None]*6)[:3] if kind=='customers' else [(r+[None]*6)[2],(r+[None]*6)[5]]
+        if not text(values[0]):continue
+        if q and q.casefold() not in ' '.join(text(v) for v in values).casefold():continue
+        rows.append({'id':i,'values':values})
+    return {'rows':rows[(page-1)*100:page*100],'total':len(rows),'revision':state['revision'],'unclassified':state['unclassified']}
 
-def styled_sheet(w,name,headers,rows):
-    s=w.create_sheet(name);s.append(headers)
-    for row in rows:s.append([safe_value(v) for v in row])
-    s.freeze_panes='A2';s.auto_filter.ref=s.dimensions
-    for c in s[1]:c.font=Font(name='맑은 고딕',bold=True,color='FFFFFF');c.fill=PatternFill('solid',fgColor='173D42')
-    from openpyxl.utils import get_column_letter
-    for j,h in enumerate(headers,1):s.column_dimensions[get_column_letter(j)].width=48 if h=='품명' else 18
-    for row in s.iter_rows(min_row=2):
-        for c in row:c.alignment=Alignment(vertical='center');c.font=Font(name='맑은 고딕',size=10)
-    return s
-
-@app.post('/api/download')
-def download(req:Request):
-    result,state=process(req);w=Workbook();w.remove(w.active)
-    s=styled_sheet(w,'추출',result['headers'],[r['values'] for r in result['rows']])
-    for i,rec in enumerate(result['rows'],2):
-        if rec['unmatched']:
-            for c in s[i]:c.fill=PatternFill('solid',fgColor='FFEBEB')
-        for col in [5,7,13,14,15]:s.cell(i,col).number_format='#,##0'
-    # 품목코드별 합계를 기존 M열과 동일하게 병합
-    start=2;records=result['rows']
-    for idx,rec in enumerate(records):
-        end=idx+2
-        if idx==len(records)-1 or str(rec['values'][5]).casefold()!=str(records[idx+1]['values'][5]).casefold():
-            if end>start:s.merge_cells(start_row=start,start_column=7,end_row=end,end_column=7)
-            start=end+1
-    styled_sheet(w,req.shipyard,HEADERS,result['source_rows'])
-    styled_sheet(w,'ERP변환',ERP_HEADERS,[r[:17] for r in state['erp']])
-    styled_sheet(w,'처리안내',['항목','내용'],[['조선소',req.shipyard],['조건',str([c.model_dump() for c in req.criteria])],['행 통합 기준','POR·호선·블록·품명·품목코드 동일, 수량만 합산'],['금액','중복 POR 첫 번째 ERP 행 사용. 통합 시 첫 번째 금액 유지.']]+[['안내',v] for v in result['warnings']])
-    out=io.BytesIO();w.save(out)
-    return Response(out.getvalue(),media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',headers={'Content-Disposition':'attachment; filename="delivery-list.xlsx"'})
-
-
-from typing import Literal
-class Classification(BaseModel):
-    customer:str=Field(min_length=1,max_length=200)
-    name:str=Field(min_length=1,max_length=200)
-    category:Literal['대형','중소']
-class ClassificationRequest(BaseModel):
-    session:str
-    rows:list[Classification]=Field(min_length=1,max_length=500)
-
-@app.post('/api/classifications')
-def save_classifications(req:ClassificationRequest):
-    with LOCK:
-        state=SESSIONS.get(req.session)
-        if not state or state['expires']<time.time():raise HTTPException(410,'작업이 만료되었습니다. 파일을 다시 올려 주세요.')
-        mappings=CLASSIFICATIONS.all()
-        rows=[]
-        for r in req.rows:
-            customer,name=r.customer.strip(),r.name.strip()
-            if not customer or not name:raise HTTPException(400,'거래처명과 조선소명을 입력하세요.')
-            mappings[customer]=(name,r.category)
-            rows.append((customer,name,r.category))
-        try:updated=convert_erp(state['book'],state.get('external'),mappings)
-        except ValueError as e:raise HTTPException(400,str(e))
-        CLASSIFICATIONS.save(rows)
-        SESSIONS[req.session]={**state,'erp':updated}
-    return {'erp_count':len(updated),'unclassified':sorted({r[0] for r in updated if r[1]=='미분류'})}
+class RefChange(BaseModel):
+    kind:Literal['customers','sets']
+    id:int|None=Field(default=None,ge=1)
+    values:list[str]=Field(min_length=2,max_length=3)
+    revision:int
+@app.post('/api/ref')
+def save_ref(req:RefChange):
+    old=current();book=deepcopy(old['book']);key='REF' if req.kind=='customers' else 'SET'
+    if req.kind=='customers':
+        if len(req.values)!=3 or req.values[2] not in ('대형','중소'):raise ValueError('거래처명·조선소명·구분을 입력하세요.')
+        values=[v.strip() for v in req.values]
+        if not all(values):raise ValueError('거래처명·조선소명·구분을 입력하세요.')
+        if any(text(r[0])==values[0] for i,r in enumerate(book[key][1:],1) if r and i!=req.id):raise ValueError('같은 거래처명이 이미 있습니다. 기존 항목을 수정하세요.')
+    else:
+        if len(req.values)!=2 or not all(v.strip() for v in req.values):raise ValueError('POR와 SET 표시를 입력하세요.')
+        values=[None,None,req.values[0].strip(),None,None,req.values[1].strip()]
+    if req.id is None:book[key].append(values)
+    elif req.id>=len(book[key]):raise ValueError('수정할 항목이 없습니다. 새로고침하세요.')
+    else:
+        if req.kind=='customers':book[key][req.id][:3]=values
+        else:
+            row=book[key][req.id];row.extend([None]*max(0,6-len(row)));row[2]=values[2];row[5]=values[5]
+    stamp=timestamp()
+    updated=rebuild({**old,'book':book,'history':(old.get('history',[])+[{'at':stamp,'target':'REF '+('거래처' if req.kind=='customers' else 'SET')+' 저장'}])[-100:]})
+    return metadata(STORE.commit(updated,req.revision))
