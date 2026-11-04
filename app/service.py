@@ -22,9 +22,9 @@ def initialize(book):
 def rebuild(state):
     erp=convert_erp(state['book'])
     unified=[];warnings=[]
-    for name in [*ADAPTERS,'중소']:
+    for name in [*ADAPTERS,*state.get('yards',{}),'중소']:
         if name!='중소' and name not in state['book']:continue
-        rows,notes=build_source(state['book'],erp,name)
+        rows,notes=build_source(state['book'],erp,name,state.get('yards',{}))
         warnings.extend([f'{name}: {v}' for v in notes])
         unified.extend([{'yard':name,'values':r} for r in rows])
     unknown=sorted({r[0] for r in erp if r[1]=='미분류'})
@@ -33,13 +33,19 @@ def rebuild(state):
 
 def norm(v):return ''.join(c for c in text(v) if c.isalnum()).casefold()
 def replace_raw(state,target,rows):
-    if target not in TARGETS:raise ValueError('업데이트할 대상을 선택하세요.')
+    if target not in [*TARGETS,*state.get('yards',{})]:raise ValueError('업데이트할 대상을 선택하세요.')
     updated={**state,'book':deepcopy(state['book']),'updates':dict(state['updates']),'history':state.get('history',[])[:]}
     if target=='ERP':
         header=next((i for i,r in enumerate(rows[:20]) if norm(cell(r,3))=='품목코드' and norm(cell(r,10))=='현장명'),None)
         if header is None:raise ValueError('ERP 원본 머리글이 다릅니다. 거래처부터 시작하는 수주 원본 전체를 업로드하세요.')
         data=rows[header:]
         updated['book']['ERP']=[[None]*19+list(r) for r in data]
+    elif target in state.get('yards',{}):
+        cfg=state['yards'][target];template=state['book'][target];expected=template[cfg['header_row']-1]
+        used=[*cfg['match_cols'],cfg['qty'],*[v for v in [cfg.get('hull'),cfg.get('block'),cfg.get('title'),cfg.get('due'),cfg.get('destination')] if v]]
+        header=next((i for i,r in enumerate(rows[:20]) if len(r)>=max(used) and all(norm(cell(r,c))==norm(cell(expected,c)) for c in used)),None)
+        if header is None:raise ValueError('신규 야드의 RAW 열 순서가 등록된 샘플과 다릅니다. REF 야드 설정을 확인하세요.')
+        updated['book'][target]=deepcopy(template[:cfg['header_row']-1])+rows[header:]
     else:
         if target not in updated['book']:raise ValueError(f'최초 ZIP에 {target} 시트가 없습니다. 해당 시트가 있는 기준 파일로 초기 등록하세요.')
         adapter=ADAPTERS[target];template=updated['book'][target]

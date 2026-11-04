@@ -5,17 +5,19 @@ from pydantic import BaseModel, Field
 from typing import Literal
 import zipfile
 from copy import deepcopy
-import io, logging
+import io, logging, os
 from .store import Store
 from .files import read_book, read_raw
 from .service import initialize, replace_raw, rebuild, filter_orders, timestamp, TARGETS
-from .engine import extract, HEADERS, ADAPTERS, text
+from .engine import extract, extract_selected, HEADERS, ADAPTERS, text
 from .exporting import export_result, styled_sheet
 from openpyxl import Workbook
 
 ROOT=Path(__file__).parent
-STORE=Store(ROOT.parent/'data/workspace.sqlite3')
-app=FastAPI(title='선일 수주관리',version='2.1')
+STORE=Store(Path(os.environ.get('DELIVERY_DATA_DIR',str(ROOT.parent/'data')))/'workspace.sqlite3')
+app=FastAPI(title='선일 수주관리',version='3.0')
+from fastapi.staticfiles import StaticFiles
+app.mount('/static',StaticFiles(directory=ROOT/'static'),name='static')
 
 @app.exception_handler(ValueError)
 async def value_error(request,exc):
@@ -39,8 +41,8 @@ def current():
 
 def metadata(state):
     if state is None:return {'initialized':False,'revision':0,'yards':[],'counts':{},'updates':{},'history':[],'warnings':[],'unclassified':[]}
-    counts={n:sum(r['yard']==n for r in state['orders']) for n in [*ADAPTERS,'중소']}
-    return {'initialized':True,'revision':state['revision'],'yards':list(counts),'counts':counts,'erp_count':len(state['erp']),'updates':state['updates'],'history':state.get('history',[])[-12:][::-1],'warnings':state['warnings'],'unclassified':state['unclassified']}
+    counts={n:sum(r['yard']==n for r in state['orders']) for n in [*ADAPTERS,*state.get('yards',{}),'중소']}
+    return {'initialized':True,'revision':state['revision'],'yards':list(counts),'counts':counts,'erp_count':len(state['erp']),'updates':state['updates'],'history':state.get('history',[])[-12:][::-1],'warnings':state['warnings'],'unclassified':state['unclassified'],'update_targets':['ERP',*ADAPTERS,*state.get('yards',{})],'yard_configs':state.get('yards',{})}
 
 @app.get('/api/state')
 def state():return metadata(STORE.read())
@@ -96,14 +98,19 @@ class Criterion(BaseModel):
     por:str=Field(default='',max_length=200)
     block:str=Field(default='',max_length=200)
 class Extraction(BaseModel):
-    yard:Literal['HMD','HHI','HSHI','중소']
+    yard:str=Field(default='',max_length=30)
+    order_ids:list[str]|None=Field(default=None,min_length=1,max_length=50000)
     criteria:list[Criterion]=Field(default_factory=list,max_length=5000)
     revision:int
 
 def extraction(req):
     state=current()
     if req.revision!=state['revision']:raise ValueError('자료가 변경됐습니다. 최신 자료로 다시 추출하세요.')
-    return extract(state['book'],state['erp'],req.yard,[{'por':c.por.strip(),'block':c.block.strip()} for c in req.criteria]),state
+    if req.order_ids is not None:
+        indexed={f"{r['yard']}:{i}":r for i,r in enumerate(state['orders'])}
+        if any(id not in indexed for id in req.order_ids):raise ValueError('선택한 행을 찾지 못했습니다. 수주현황을 다시 조회하세요.')
+        return extract_selected([indexed[id] for id in dict.fromkeys(req.order_ids)],state['erp']),state
+    return extract(state['book'],state['erp'],req.yard,[{'por':c.por.strip(),'block':c.block.strip()} for c in req.criteria],state.get('yards',{})),state
 
 @app.post('/api/extract')
 def preview(req:Extraction):
@@ -202,10 +209,15 @@ def download_shipments(q:str='',yard:str='',status:str='',date_from:str='',date_
     # 같은 확정 묶음 안의 연속 품목별 합계만 병합합니다.
     start=2
     for i,r in enumerate(rows):
-        group=(r['batch_id'],text(r['values'][5]).casefold(),r['values'][6])
-        next_group=None if i==len(rows)-1 else (rows[i+1]['batch_id'],text(rows[i+1]['values'][5]).casefold(),rows[i+1]['values'][6])
+        group=(r['batch_id'],r['yard'],text(r['values'][5]).casefold(),r['values'][6])
+        next_group=None if i==len(rows)-1 else (rows[i+1]['batch_id'],rows[i+1]['yard'],text(rows[i+1]['values'][5]).casefold(),rows[i+1]['values'][6])
         if group!=next_group:
             if i+2>start:s.merge_cells(start_row=start,start_column=10,end_row=i+2,end_column=10)
             start=i+3
     out=io.BytesIO();w.save(out)
     return excel(out.getvalue(),'shipment-history.xlsx')
+
+
+# 선택 행·야드 설정·기존 출고리스트 가져오기 API
+from .advanced import register_advanced
+register_advanced(app, lambda: STORE, current, metadata, bytes_of, excel)

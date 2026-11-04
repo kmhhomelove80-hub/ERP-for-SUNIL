@@ -19,16 +19,16 @@ def styled_sheet(w,name,headers,rows):
 
 def export_result(result,erp):
     w=Workbook();w.remove(w.active)
-    s=styled_sheet(w,'추출',result['headers'],[r['values'] for r in result['rows']])
+    s=styled_sheet(w,'추출',['조선소',*result['headers']],[[r.get('yard',''),*r['values']] for r in result['rows']])
     for i,rec in enumerate(result['rows'],2):
         if rec['unmatched']:
             for c in s[i]:c.fill=PatternFill('solid',fgColor='FFEBEB')
-        for col in [5,7,13,14,15]:s.cell(i,col).number_format='#,##0'
+        for col in [6,8,14,15,16]:s.cell(i,col).number_format='#,##0'
     start=2;records=result['rows']
     for idx,rec in enumerate(records):
         end=idx+2
-        if idx==len(records)-1 or str(rec['values'][5]).casefold()!=str(records[idx+1]['values'][5]).casefold():
-            if end>start:s.merge_cells(start_row=start,start_column=7,end_row=end,end_column=7)
+        if idx==len(records)-1 or (rec.get('yard'),str(rec['values'][5]).casefold())!=(records[idx+1].get('yard'),str(records[idx+1]['values'][5]).casefold()):
+            if end>start:s.merge_cells(start_row=start,start_column=8,end_row=end,end_column=8)
             start=end+1
     styled_sheet(w,'처리안내',['항목','내용'],[['행 통합 기준','POR·호선·블록·품명·품목코드 동일, 수량만 합산'],['금액','첫 번째 일치 행 유지']]+[['안내',v] for v in result['warnings']])
     out=io.BytesIO();w.save(out);return out.getvalue()

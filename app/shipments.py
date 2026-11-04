@@ -30,11 +30,11 @@ class Shipments:
                 return {'batch_id':prior[0],'count':count,'inserted':False}
             batch=uuid.uuid4().hex;stamp=datetime.now(timezone(timedelta(hours=9))).isoformat()
             db.execute('INSERT INTO shipment_batches VALUES(?,?,?,?)',(batch,key,signature,stamp))
-            db.executemany('INSERT INTO shipments(batch_id,yard,status,memo,payload) VALUES(?,?,?,?,?)',[(batch,yard,'pending','',json.dumps(r,ensure_ascii=False)) for r in records])
+            db.executemany('INSERT INTO shipments(batch_id,yard,status,memo,payload) VALUES(?,?,?,?,?)',[(batch,r.get('yard',yard),r.get('import_status','pending'),'',json.dumps(r,ensure_ascii=False)) for r in records])
             return {'batch_id':batch,'count':len(records),'inserted':True}
     def rows(self,q='',yard='',status='',date_from='',date_to=''):
         with sqlite3.connect(self.path) as db:
-            rows=db.execute('SELECT s.id,s.batch_id,s.yard,s.status,s.memo,s.payload,b.created FROM shipments s JOIN shipment_batches b ON b.id=s.batch_id ORDER BY s.id').fetchall()
+            rows=db.execute('SELECT s.id,s.batch_id,s.yard,s.status,s.memo,s.payload,b.created FROM shipments s JOIN shipment_batches b ON b.id=s.batch_id ORDER BY b.rowid DESC, s.id ASC').fetchall()
         out=[]
         for id,batch,y,s,memo,payload,created in rows:
             if yard and y!=yard:continue
@@ -60,3 +60,7 @@ class Shipments:
             if memo is not None:fields.append('memo=?');values.append(memo)
             db.execute(f'UPDATE shipments SET {", ".join(fields)} WHERE id IN ({placeholders})',values+ids)
         return count
+
+    def import_records(self,key,signature,yard,records):
+        if any(r.get('import_status') not in STATUSES for r in records):raise ValueError('기존 내역의 상태를 확인하세요.')
+        return self.confirm(key,signature,yard,records)

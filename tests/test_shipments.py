@@ -43,3 +43,11 @@ class ShipmentTests(unittest.TestCase):
         self.ledger.confirm('r','s','HMD',self.records)
         self.assertEqual(len(self.ledger.rows(q='CODE',yard='HMD')),1)
         self.assertEqual(len(self.ledger.rows(yard='HHI')),0)
+
+    def test_newest_batch_first_and_internal_order_preserved(self):
+        first=[{'values':self.records[0]['values'][:],'unmatched':False}]
+        self.ledger.confirm('old','old','HMD',first)
+        newer=[{'values':self.records[0]['values'][:],'unmatched':False},{'values':self.records[0]['values'][:],'unmatched':False}]
+        newer[0]['values'][0]='NEW-1';newer[1]['values'][0]='NEW-2'
+        self.ledger.confirm('new','new','HMD',newer)
+        self.assertEqual([r['values'][0] for r in self.ledger.rows()],['NEW-1','NEW-2','POR'])

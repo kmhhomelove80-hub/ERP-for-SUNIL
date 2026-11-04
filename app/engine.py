@@ -100,7 +100,11 @@ def convert_erp(book, external=None, overrides=None):
 
 def complex_key(d,n,c,q): return (day(d),text(number(n)) if text(n) else '',text(c),number(q))
 
-def build_source(book, erp, name):
+def build_source(book, erp, name, configs=None):
+    if configs and name in configs:
+        from .yards import configured_source
+        rows,notes,_=configured_source(book,erp,name,configs[name])
+        return rows,notes
     if name=='중소':
         return [[r[8],r[2],r[3],r[17],r[12],r[9],None,None,r[10],r[11],None,r[16]] for r in erp if r[1]=='중소'], []
     if name not in ADAPTERS: raise ValueError('이 조선소는 아직 처리 규칙이 준비되지 않았습니다.')
@@ -128,41 +132,47 @@ def build_source(book, erp, name):
     if missing: warnings.append(f'원본 중 ERP POR 조회 실패 {missing}행: 품목코드·수주정보가 비어 있을 수 있습니다.')
     return out,warnings
 
-def extract(book, erp, name, criteria):
-    source,warnings=build_source(book,erp,name)
+def extract(book, erp, name, criteria, configs=None):
+    source,warnings=build_source(book,erp,name,configs)
     unknown=sorted({r[0] for r in erp if r[1]=='미분류'})
     if unknown:warnings.append('REF 미등록 거래처는 중소 추출에서 제외됩니다: '+', '.join(unknown))
-    # POR 빈 목록은 전체 추출. 조건 목록의 각 행은 OR, POR와 블록은 AND.
     def matches(r):
         if not criteria:return True
-        return any((not c['por'] or text(r[0])==c['por']) and (name!='HSHI' or not c['block'] or text(r[2])==c['block']) for c in criteria)
-    selected=[r[:] for r in source if matches(r)]
-    before=len(selected)
-    if name=='HMD':selected=[r for r in selected if text(r[10])]
+        return any((not c['por'] or text(r[0])==c['por']) and ((name!='HSHI' and name not in (configs or {})) or not c['block'] or text(r[2])==c['block']) for c in criteria)
+    selected=[{'yard':name,'values':r[:]} for r in source if matches(r)]
+    result=extract_selected(selected,erp,warnings)
+    result['source_rows']=source
+    return result
+
+def extract_selected(orders,erp,warnings=None):
+    warnings=list(warnings or [])
+    before=len(orders)
+    selected=[o for o in orders if o['yard']!='HMD' or text(o['values'][10])]
     removed=before-len(selected)
-    simple={}; complex_map={}
+    simple={};complex_map={}
     for r in erp:
         if text(r[8]):simple.setdefault(text(r[8]),r[13:16])
         complex_map.setdefault(complex_key(r[10],r[11],r[9],r[12]),r[13:16])
-    data=[]; missing_money=0
-    for r in selected:
-        money=complex_map.get(complex_key(r[8],r[9],r[5],r[4])) if name=='중소' else simple.get(text(r[0]))
+    data=[];missing_money=0
+    for order in selected:
+        r=order['values'];yard=order['yard']
+        money=complex_map.get(complex_key(r[8],r[9],r[5],r[4])) if yard=='중소' else simple.get(text(r[0]))
         if money is None:missing_money+=1
-        data.append({'values':r+(money if money is not None else [None]*3),'unmatched':money is None})
-    groups={}; conflicts=0
+        data.append({'yard':yard,'values':r[:12]+(money if money is not None else [None]*3),'unmatched':money is None})
+    groups={};conflicts=0
     for record in data:
-        r=record['values']; key=tuple(text(r[i]) for i in (0,1,2,3,5))
+        r=record['values'];key=(record['yard'],*[text(r[i]) for i in (0,1,2,3,5)])
         if key in groups:
             target=groups[key]
             if target['values'][7:]!=r[7:]:conflicts+=1
             target['values'][4]=(target['values'][4] or 0)+(r[4] or 0)
             target['unmatched'] |= record['unmatched']
-        else:groups[key]={'values':r[:],'unmatched':record['unmatched']}
-    result=sorted(groups.values(),key=lambda r:text(r['values'][5]).casefold())
+        else:groups[key]={'yard':record['yard'],'values':r[:],'unmatched':record['unmatched']}
+    result=sorted(groups.values(),key=lambda r:(r['yard'],text(r['values'][5]).casefold()))
     sums={}
     for rec in result:
-        r=rec['values'];k=text(r[5]).casefold();sums[k]=sums.get(k,0)+(r[4] or 0)
-    for rec in result:rec['values'][6]=sums[text(rec['values'][5]).casefold()]
+        k=(rec['yard'],text(rec['values'][5]).casefold());sums[k]=sums.get(k,0)+(rec['values'][4] or 0)
+    for rec in result:rec['values'][6]=sums[(rec['yard'],text(rec['values'][5]).casefold())]
     if conflicts:warnings.append(f'통합된 {conflicts}행의 부가정보가 달라 첫 번째 행의 납기·납품처·금액을 유지했습니다.')
     if missing_money:warnings.append(f'ERP 금액 조회 실패 {missing_money}행: 결과에 표시했습니다.')
-    return {'rows':result,'headers':HEADERS+['공급가액','부가세','합계금액'],'warnings':warnings,'stats':{'selected':before,'removed':removed,'consolidated':len(data)-len(result),'final':len(result),'quantity':sum(r['values'][4] or 0 for r in result)},'source_rows':source}
+    return {'rows':result,'headers':HEADERS+['공급가액','부가세','합계금액'],'warnings':warnings,'stats':{'selected':before,'removed':removed,'consolidated':len(data)-len(result),'final':len(result),'quantity':sum(r['values'][4] or 0 for r in result)},'source_rows':[]}
