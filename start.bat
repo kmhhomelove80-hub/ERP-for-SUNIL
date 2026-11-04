@@ -1,24 +1,32 @@
 @echo off
+setlocal
 chcp 65001 >nul
+set "PYTHONUTF8=1"
 cd /d "%~dp0"
-if not exist requirements.txt goto missing
-if not exist .venv\Scripts\python.exe (
-  py -3.12 -m venv .venv
-  if errorlevel 1 goto python_missing
-)
-.venv\Scripts\python.exe -m pip install -r requirements.txt
-if errorlevel 1 goto error
-.venv\Scripts\python.exe run.py
-pause
-exit /b
-:python_missing
-echo Python 3.12가 필요합니다. Python 3.12 설치 후 다시 실행하세요.
-pause
-exit /b
+if errorlevel 1 goto path_error
+if not exist "bootstrap.py" goto missing
+py -3.12 -c "import sys" >nul 2>&1
+if not errorlevel 1 goto py312
+py -3.13 -c "import sys" >nul 2>&1
+if not errorlevel 1 goto py313
+py -3.14 -c "import sys" >nul 2>&1
+if not errorlevel 1 goto py314
+python "bootstrap.py"
+goto done
+:py312
+py -3.12 "bootstrap.py"
+goto done
+:py313
+py -3.13 "bootstrap.py"
+goto done
+:py314
+py -3.14 "bootstrap.py"
+goto done
 :missing
-echo ZIP 전체를 먼저 압축 해제한 뒤 폴더 안의 start.bat을 실행하세요.
+echo Please extract the entire ZIP before running start.bat.
+goto done
+:path_error
+echo Unable to open the application folder.
+:done
 pause
-exit /b
-:error
-echo 실행 준비에 실패했습니다. 위 오류 메시지를 확인해 주세요.
-pause
+endlocal
