@@ -9,13 +9,13 @@ import io, logging, os
 from .store import Store
 from .files import read_book, read_raw
 from .service import initialize, replace_raw, rebuild, filter_orders, timestamp, TARGETS
-from .engine import extract, extract_selected, HEADERS, ADAPTERS, text
+from .engine import extract, extract_selected, HEADERS, ADAPTERS, text, product_key
 from .exporting import export_result, styled_sheet
 from openpyxl import Workbook
 
 ROOT=Path(__file__).parent
 STORE=Store(Path(os.environ.get('DELIVERY_DATA_DIR',str(ROOT.parent/'data')))/'workspace.sqlite3')
-app=FastAPI(title='선일 수주관리',version='3.0')
+app=FastAPI(title='선일 수주관리',version='4.0')
 from fastapi.staticfiles import StaticFiles
 app.mount('/static',StaticFiles(directory=ROOT/'static'),name='static')
 
@@ -29,6 +29,16 @@ async def bad_zip(request,exc):
     from fastapi.responses import JSONResponse
     return JSONResponse(status_code=400,content={'detail':'압축 또는 엑셀 파일을 읽지 못했습니다. 파일이 손상되지 않았는지 확인하세요.'})
 
+@app.exception_handler(PermissionError)
+async def permission_error(request,exc):
+    from fastapi.responses import JSONResponse
+    return JSONResponse(status_code=400,content={'detail':'파일 접근 권한이 없습니다. 백업 경로의 쓰기 권한 또는 열려 있는 파일을 확인하세요. 자료는 유지됩니다.'})
+
+@app.exception_handler(OSError)
+async def file_error(request,exc):
+    from fastapi.responses import JSONResponse
+    return JSONResponse(status_code=400,content={'detail':'파일 저장 또는 읽기에 실패했습니다. 디스크 여유 공간·백업 경로를 확인하세요. 마감 대상은 저장 성공 전에는 목록에서 제거하지 않습니다.'})
+
 @app.get('/',response_class=HTMLResponse)
 def home():return (ROOT/'static/index.html').read_text()
 @app.get('/favicon.ico',include_in_schema=False)
@@ -37,6 +47,8 @@ def favicon():return Response(status_code=204)
 def current():
     state=STORE.read()
     if state is None:raise ValueError('업데이트 탭에서 최초 기준 ZIP을 등록하세요.')
+    if state.get('schema_version',0)<4:
+        state=STORE.commit(rebuild({**state,'schema_version':4}),state['revision'])
     return state
 
 def metadata(state):
@@ -45,7 +57,7 @@ def metadata(state):
     return {'initialized':True,'revision':state['revision'],'yards':list(counts),'counts':counts,'erp_count':len(state['erp']),'updates':state['updates'],'history':state.get('history',[])[-12:][::-1],'warnings':state['warnings'],'unclassified':state['unclassified'],'update_targets':['ERP',*ADAPTERS,*state.get('yards',{})],'yard_configs':state.get('yards',{})}
 
 @app.get('/api/state')
-def state():return metadata(STORE.read())
+def state():return metadata(current() if STORE.read() else None)
 
 async def bytes_of(file):
     data=await file.read(25*1024*1024+1)
@@ -110,7 +122,9 @@ def extraction(req):
         indexed={f"{r['yard']}:{i}":r for i,r in enumerate(state['orders'])}
         if any(id not in indexed for id in req.order_ids):raise ValueError('선택한 행을 찾지 못했습니다. 수주현황을 다시 조회하세요.')
         return extract_selected([indexed[id] for id in dict.fromkeys(req.order_ids)],state['erp']),state
-    return extract(state['book'],state['erp'],req.yard,[{'por':c.por.strip(),'block':c.block.strip()} for c in req.criteria],state.get('yards',{})),state
+    if req.yard not in [*ADAPTERS,*state.get('yards',{}),'중소']:raise ValueError('추출 대상을 확인하세요.')
+    selected=[r for r in state['orders'] if r['yard']==req.yard and (not req.criteria or any((not c.por.strip() or text(r['values'][0])==c.por.strip()) and (req.yard not in ['HSHI',*state.get('yards',{})] or not c.block.strip() or text(r['values'][2])==c.block.strip()) for c in req.criteria))]
+    return extract_selected(selected,state['erp']),state
 
 @app.post('/api/extract')
 def preview(req:Extraction):
@@ -205,12 +219,14 @@ def download_shipments(q:str='',yard:str='',status:str='',date_from:str='',date_
         color={'shortage':'FF0000','erp_completed':'FFFF00'}.get(r['status'])
         if color:
             for c in s[i]:c.fill=PatternFill('solid',fgColor=color)
-        for col in [8,10,16,17,18]:s.cell(i,col).number_format='#,##0'
+        for col in [8,10,16,17,18]:
+            value=s.cell(i,col).value
+            s.cell(i,col).number_format='#,##0.########' if col in (8,10) and isinstance(value,(int,float)) and value%1 else '#,##0'
     # 같은 확정 묶음 안의 연속 품목별 합계만 병합합니다.
     start=2
     for i,r in enumerate(rows):
-        group=(r['batch_id'],r['yard'],text(r['values'][5]).casefold(),r['values'][6])
-        next_group=None if i==len(rows)-1 else (rows[i+1]['batch_id'],rows[i+1]['yard'],text(rows[i+1]['values'][5]).casefold(),rows[i+1]['values'][6])
+        group=(r['batch_id'],r['yard'],product_key(r['values']),r['values'][6])
+        next_group=None if i==len(rows)-1 else (rows[i+1]['batch_id'],rows[i+1]['yard'],product_key(rows[i+1]['values']),rows[i+1]['values'][6])
         if group!=next_group:
             if i+2>start:s.merge_cells(start_row=start,start_column=10,end_row=i+2,end_column=10)
             start=i+3
@@ -221,3 +237,5 @@ def download_shipments(q:str='',yard:str='',status:str='',date_from:str='',date_
 # 선택 행·야드 설정·기존 출고리스트 가져오기 API
 from .advanced import register_advanced
 register_advanced(app, lambda: STORE, current, metadata, bytes_of, excel)
+from .management import register_management
+register_management(app,lambda: STORE,current,metadata,bytes_of,excel)

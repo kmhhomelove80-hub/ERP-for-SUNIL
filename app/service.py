@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from copy import deepcopy
 from .engine import *
 from .classifications import DEFAULTS
+from .order_edits import apply_manual
 
 TARGETS=['ERP','HMD','HHI','HSHI']
 def timestamp():return datetime.now(timezone.utc).isoformat()
@@ -29,7 +30,7 @@ def rebuild(state):
         unified.extend([{'yard':name,'values':r} for r in rows])
     unknown=sorted({r[0] for r in erp if r[1]=='미분류'})
     if unknown:warnings.append('REF 미등록 거래처: '+', '.join(unknown))
-    return {**state,'erp':erp,'orders':unified,'warnings':warnings,'unclassified':unknown}
+    return {**state,'schema_version':4,'erp':erp,'orders':apply_manual(unified,state.get('manual_orders',{})),'warnings':warnings,'unclassified':unknown}
 
 def norm(v):return ''.join(c for c in text(v) if c.isalnum()).casefold()
 def replace_raw(state,target,rows):
@@ -66,6 +67,8 @@ def replace_raw(state,target,rows):
         records=[[None]*13+list(r[offset:]) for r in rows[i+1:] if any(text(v) for v in r[offset:])]
         # 머리글만 있는 자료는 해당 대상의 전체 자료를 비웁니다.
         updated['book'][target]=deepcopy(template[:adapter.header])+records
+    clear_yard='중소' if target=='ERP' else target
+    updated['manual_orders']={k:v for k,v in state.get('manual_orders',{}).items() if not k.startswith(clear_yard+':')}
     stamp=timestamp();updated['updates'][target]=stamp
     updated['history']=(updated['history']+[{'at':stamp,'target':target+' 전체 교체'}])[-100:]
     return rebuild(updated)

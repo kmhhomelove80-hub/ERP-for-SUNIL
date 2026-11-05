@@ -1,6 +1,7 @@
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment
 import io
+from .engine import product_key
 def safe_value(v):
     # 문자열이 다운로드 파일에서 수식으로 해석되는 것 방지
     return "'"+v if isinstance(v,str) and v.startswith(('=','+','-','@')) else v
@@ -23,11 +24,13 @@ def export_result(result,erp):
     for i,rec in enumerate(result['rows'],2):
         if rec['unmatched']:
             for c in s[i]:c.fill=PatternFill('solid',fgColor='FFEBEB')
-        for col in [6,8,14,15,16]:s.cell(i,col).number_format='#,##0'
+        for col in [6,8,14,15,16]:
+            value=s.cell(i,col).value
+            s.cell(i,col).number_format='#,##0.########' if col in (6,8) and isinstance(value,(int,float)) and value%1 else '#,##0'
     start=2;records=result['rows']
     for idx,rec in enumerate(records):
         end=idx+2
-        if idx==len(records)-1 or (rec.get('yard'),str(rec['values'][5]).casefold())!=(records[idx+1].get('yard'),str(records[idx+1]['values'][5]).casefold()):
+        if idx==len(records)-1 or (rec.get('yard'),product_key(rec['values']))!=(records[idx+1].get('yard'),product_key(records[idx+1]['values'])):
             if end>start:s.merge_cells(start_row=start,start_column=8,end_row=end,end_column=8)
             start=end+1
     styled_sheet(w,'처리안내',['항목','내용'],[['행 통합 기준','POR·호선·블록·품명·품목코드 동일, 수량만 합산'],['금액','첫 번째 일치 행 유지']]+[['안내',v] for v in result['warnings']])

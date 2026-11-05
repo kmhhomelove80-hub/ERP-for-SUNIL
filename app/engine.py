@@ -98,6 +98,10 @@ def convert_erp(book, external=None, overrides=None):
         out.append([customer,category,hull,order,seq,len(hull),len(order),len(seq),por,text(cell(r,3)),day(cell(r,12)),number(cell(r,20)),number(cell(r,22)),number(cell(r,28)),number(cell(r,29)),number(cell(r,30)),day(cell(r,16)),text(cell(r,4))])
     return out
 
+def product_key(values):
+    code=text(values[5]).casefold()
+    return ('code',code) if code else ('missing',text(values[0]).casefold(),text(values[3]).casefold())
+
 def complex_key(d,n,c,q): return (day(d),text(number(n)) if text(n) else '',text(c),number(q))
 
 def build_source(book, erp, name, configs=None):
@@ -171,8 +175,8 @@ def extract_selected(orders,erp,warnings=None):
     result=sorted(groups.values(),key=lambda r:(r['yard'],text(r['values'][5]).casefold()))
     sums={}
     for rec in result:
-        k=(rec['yard'],text(rec['values'][5]).casefold());sums[k]=sums.get(k,0)+(rec['values'][4] or 0)
-    for rec in result:rec['values'][6]=sums[(rec['yard'],text(rec['values'][5]).casefold())]
+        k=(rec['yard'],product_key(rec['values']));sums[k]=sums.get(k,0)+(rec['values'][4] or 0)
+    for rec in result:rec['values'][6]=sums[(rec['yard'],product_key(rec['values']))]
     if conflicts:warnings.append(f'통합된 {conflicts}행의 부가정보가 달라 첫 번째 행의 납기·납품처·금액을 유지했습니다.')
     if missing_money:warnings.append(f'ERP 금액 조회 실패 {missing_money}행: 결과에 표시했습니다.')
     return {'rows':result,'headers':HEADERS+['공급가액','부가세','합계금액'],'warnings':warnings,'stats':{'selected':before,'removed':removed,'consolidated':len(data)-len(result),'final':len(result),'quantity':sum(r['values'][4] or 0 for r in result)},'source_rows':[]}
